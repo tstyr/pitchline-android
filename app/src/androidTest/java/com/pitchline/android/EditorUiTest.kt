@@ -2,6 +2,9 @@ package com.pitchline.android
 
 import android.net.Uri
 import android.graphics.Bitmap
+import android.os.SystemClock
+import android.view.InputDevice
+import android.view.MotionEvent
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -61,10 +64,20 @@ class EditorUiTest {
         compose.runOnIdle { assertEquals(15_000L, model.state.value.edit.positionMs) }
         compose.onNodeWithTag("cut-back15").performClick()
         compose.runOnIdle { assertEquals(0L, model.state.value.edit.positionMs) }
+        val playCenter = compose.onNodeWithTag("cut-play").fetchSemanticsNode().boundsInWindow.center
         compose.onNodeWithTag("cut-play").performClick()
         compose.waitUntil(10_000) { model.state.value.playing }
         compose.waitUntil(5000) { model.state.value.edit.positionMs > 100 }
-        compose.onNodeWithTag("cut-play").performClick()
+        // Playback updates the cursor every frame. Inject a real pause tap without
+        // Espresso waiting for this intentionally animated screen to become idle.
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val downTime = SystemClock.uptimeMillis()
+        for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+            val event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, playCenter.x, playCenter.y, 0)
+            event.source = InputDevice.SOURCE_TOUCHSCREEN
+            try { assertTrue(automation.injectInputEvent(event, true)) } finally { event.recycle() }
+        }
+        compose.waitUntil(5000) { !model.state.value.playing && !model.state.value.preparing }
         compose.runOnIdle { assertTrue(!model.state.value.playing) }
         assertNull(model.state.value.message)
         compose.onNodeWithTag("cut-wave").performTouchInput { click(Offset(width / 2f, height / 2f)) }
