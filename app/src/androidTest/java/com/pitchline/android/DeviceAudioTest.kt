@@ -6,7 +6,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -73,9 +72,8 @@ class DeviceAudioTest {
         }
     }
 
-    @Test fun bothCpuModelsProduceAlignedStemsWhenWeightsAreStaged() = runBlocking {
+    @Test fun bothCpuModelsDownloadVerifiedWeightsAndProduceAlignedStems() = runBlocking {
         val models = ModelStore(context)
-        assumeTrue(SeparationMode.entries.all(models::downloaded))
         val directory = File(context.cacheDir, "separation-test").apply { mkdirs() }
         try {
             val fixture = fixture(directory, "wav")
@@ -83,6 +81,7 @@ class DeviceAudioTest {
             val info = AudioImport.decode(context, Uri.fromFile(fixture), source) {}
             for (mode in SeparationMode.entries) {
                 val graph = models.prepare(mode) {}
+                assertTrue("Verified model must be cached", models.downloaded(mode))
                 val vocals = File(directory, "vocals.pcm")
                 val backing = File(directory, "backing.pcm")
                 Separator.separate(graph, source, vocals, backing, info, mode) {}

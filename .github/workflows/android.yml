@@ -5,6 +5,7 @@ on:
     branches: ["**"]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -24,16 +25,21 @@ jobs:
       - name: Native DSP tests
         run: scripts/test-dsp.sh
       - name: Gradle tests, lint and APK
-        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:testCompactUnitTest :app:lintDebug :app:lintCompact :app:assembleCompact
+      - name: Check ARM64 size and compression
+        run: python3 scripts/apk-report.py app/build/outputs/apk/compact/app-compact.apk --compact --arm64 | tee apk-report.json
       - uses: actions/upload-artifact@v4
         with:
-          name: Pitchline-arm64-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Pitchline-arm64-compact-debug
+          path: |
+            app/build/outputs/apk/compact/app-compact.apk
+            app/build/outputs/mapping/compact/
+            app/build/reports/
+            apk-report.json
           if-no-files-found: error
 
   device-test:
     runs-on: ubuntu-latest
-    if: github.ref_type != 'tag'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -49,22 +55,26 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Build device tests
-        run: ./gradlew --no-daemon -PpitchlineEmulator :app:assembleDebug :app:assembleDebugAndroidTest
+        run: ./gradlew --no-daemon -PpitchlineEmulator -PpitchlineTestBuildType=compact :app:assembleCompact :app:assembleCompactAndroidTest
       - uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
           target: default
           arch: x86_64
           disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: scripts/test-device.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: Android-device-test-results
-          path: app/build/outputs/androidTest-results/
+          path: |
+            app/build/outputs/androidTest-results/
+            app/build/reports/androidTests/
+            app/build/outputs/mapping/compact/
 
   release:
-    needs: build
+    needs: [build, device-test]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -101,17 +111,18 @@ jobs:
             export PITCHLINE_KEYSTORE="$RUNNER_TEMP/pitchline-release.jks"
             trap 'rm -f "$PITCHLINE_KEYSTORE"' EXIT
             printf '%s' "$PITCHLINE_KEYSTORE_BASE64" | base64 --decode > "$PITCHLINE_KEYSTORE"
-            ./gradlew --no-daemon :app:assembleRelease
+            ./gradlew --no-daemon :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease
             apk="Pitchline-v${PITCHLINE_VERSION}-arm64.apk"
             cp app/build/outputs/apk/release/app-release.apk "$apk"
             echo "debug=false" >> "$GITHUB_OUTPUT"
           else
-            ./gradlew --no-daemon :app:assembleDebug
+            ./gradlew --no-daemon :app:assembleCompact
             apk="Pitchline-v${PITCHLINE_VERSION}-arm64-debug.apk"
-            cp app/build/outputs/apk/debug/app-debug.apk "$apk"
+            cp app/build/outputs/apk/compact/app-compact.apk "$apk"
             echo "debug=true" >> "$GITHUB_OUTPUT"
           fi
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
+          python3 scripts/apk-report.py "$apk" --compact --arm64 > "$apk.report.json"
           sha256sum "$apk" > "$apk.sha256"
           echo "apk=$apk" >> "$GITHUB_OUTPUT"
       - name: Publish APK
@@ -123,10 +134,23 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$DEBUG_APK" == true ]]; then
-            printf '%s\n' 'テスト用 Debug APK です。配布用の署名キーは設定されていません。' > "$RUNNER_TEMP/release-notes.md"
+            printf '%s\n' 'テスト用 Debug APK（ARM64、R8・リソース縮小済み）です。配布用の署名キーは未設定です。' \
+              'Android 8.0 以降のインストール許可をブラウザに付与して APK をインストールしてください。' \
+              '分離モデルは初回に各約34 MiBを追加取得し SHA-256 を検証します。' \
+              'Galaxy S26 実機および ARM64 Android 17 での動作・音質・発熱は未検証です。' \
+              'Debug 署名鍵は実行ごとに変わります。以前の Debug 版との更新に失敗する場合は、プロジェクトを保持したまま更新する手段はありません。アンインストールすると保存データが失われます。' \
+              '' "APK 直接ダウンロード: https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$APK" > "$RUNNER_TEMP/release-notes.md"
             gh release create "$GITHUB_REF_NAME" "$APK" "$APK.sha256" --verify-tag --prerelease \
               --title "Pitchline $GITHUB_REF_NAME (Debug)" --notes-file "$RUNNER_TEMP/release-notes.md"
           else
             gh release create "$GITHUB_REF_NAME" "$APK" "$APK.sha256" --verify-tag \
               --title "Pitchline $GITHUB_REF_NAME" --generate-notes
           fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Release-verification
+          path: |
+            *.report.json
+            app/build/outputs/mapping/
+            app/build/reports/

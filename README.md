@@ -34,7 +34,7 @@ scripts/test-dsp.sh
 Debug APK は `app/build/outputs/apk/debug/app-debug.apk` に生成されます。x86_64 の Android エミュレーターで音声入出力、保存・復元、分離、Compose 操作をテストするには、起動済みエミュレーターに対して次を実行します。
 
 ```sh
-./gradlew -PpitchlineEmulator :app:assembleDebug :app:assembleDebugAndroidTest
+./gradlew -PpitchlineEmulator -PpitchlineTestBuildType=compact :app:assembleCompact :app:assembleCompactAndroidTest
 scripts/test-device.sh
 ```
 
@@ -42,7 +42,16 @@ ONNX グラフを再生成して PyTorch 版との一致を確認する場合は
 
 ## GitHub Actions と配布
 
-通常の push／PR では DSP・Gradle のテスト、Lint、Debug APK の生成と Artifacts へのアップロードを行います。タグ `vX.Y.Z` の push では、次の Actions Secrets が揃っていれば配布用に署名した APK を GitHub Releases に追加します。
+通常の push／PR では DSP・Gradle のテスト、Lint、軽量化した ARM64 APK の生成と Artifacts へのアップロードを行います。エミュレーターでは R8 適用済みの `compact` ビルドで 5 形式の読み込み、プロジェクト復元、3 形式の書き出しと再読み込み、ノート編集と Undo、Open-Unmix 2 種の CPU 分離を確認します。モデルはアプリの通常の取得経路でダウンロードと SHA-256 検証を行い、分離テストを省略しません。
+
+配布ビルドは ARM64 のみ、ネイティブライブラリと DEX を ZIP 圧縮し、R8 とリソース縮小を適用します。ONNX Runtime 全体の JNI API と `NativeDsp` の名前を keep ルールで保護しています。ライブラリはインストール時に展開されるため、ダウンロードサイズとインストール後の使用容量は異なります。モデル重みは APK に含めず、既存どおり初回取得と SHA-256 検証を行います。
+
+```sh
+./gradlew :app:assembleCompact :app:testCompactUnitTest :app:lintCompact
+python3 scripts/apk-report.py app/build/outputs/apk/compact/app-compact.apk --compact --arm64
+```
+
+`compact` は Release と同じ縮小設定を使用するテスト用 Debug 署名ビルドです。`release` は配布用署名鍵が必要です。タグ `vX.Y.Z` の push ではビルドとエミュレーターテストの両方が成功した後、次の Actions Secrets が揃っていれば配布用に署名した APK と SHA-256 ファイルを GitHub Releases に追加します。
 
 - `PITCHLINE_KEYSTORE_BASE64`
 - `PITCHLINE_STORE_PASSWORD`
@@ -50,6 +59,10 @@ ONNX グラフを再生成して PyTorch 版との一致を確認する場合は
 - `PITCHLINE_KEY_PASSWORD`
 
 署名設定がない場合は、Debug と明記されたプレリリースを作成します。秘密鍵はリポジトリに含めません。
+
+公開先: https://github.com/tstyr/pitchline-android/releases
+
+Release の APK リンクは `https://github.com/tstyr/pitchline-android/releases/download/<タグ>/<APK名>` です。チャット内プレビューを開かず、スマホのブラウザでこのリンクから APK をダウンロードしてください。ブラウザの「不明なアプリのインストール」を許可して開きます。配布用署名鍵が未設定の Debug 版は Actions 実行ごとに署名が変わるため、次の版へデータを維持して更新できることは保証しません。アンインストールは保存済みプロジェクトを削除します。
 
 ## 対応範囲
 
