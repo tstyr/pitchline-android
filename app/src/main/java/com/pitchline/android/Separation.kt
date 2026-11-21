@@ -6,6 +6,10 @@ import ai.onnxruntime.OrtSession
 import android.content.Context
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import java.net.SocketException
+import java.net.SocketTimeoutException
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -36,7 +40,21 @@ class ModelStore(private val context: Context) {
 
     suspend fun prepare(mode: SeparationMode, progress: Progress): File {
         val checkpoint = weight(mode)
-        if (!downloaded(mode) || sha256(checkpoint) != mode.sha256) download(mode, checkpoint, progress)
+        if (!downloaded(mode) || sha256(checkpoint) != mode.sha256) {
+            var retries = 0
+            while (true) {
+                try {
+                    download(mode, checkpoint, progress)
+                    break
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    val temporary = error is SocketTimeoutException || error is SocketException ||
+                        error.message.orEmpty().contains("(HTTP 5") || error.message.orEmpty().contains("(HTTP 429)")
+                    if (!temporary || retries >= 2) throw error
+                    delay(if (retries++ == 0) 1000L else 3000L)
+                }
+            }
+        }
         val graph = File(directory, "${mode.key}.onnx")
         val partial = File(directory, "${mode.key}.onnx.part")
         try {

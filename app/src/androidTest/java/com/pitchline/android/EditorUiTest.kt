@@ -43,14 +43,20 @@ class EditorUiTest {
         compose.runOnIdle { assertEquals(CutEdge.END, model.state.value.edge) }
         compose.onNodeWithText("10 ms").performScrollTo()
         compose.onNodeWithTag("cutter").performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 180f) }
+        compose.mainClock.advanceTimeBy(1000)
+        compose.waitForIdle()
         compose.onNodeWithText("10 ms").performClick()
         compose.onNodeWithText("10 ms").assertIsSelected()
         compose.onNodeWithTag("cut-minus").performScrollTo()
         compose.onNodeWithTag("cutter").performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 180f) }
+        compose.mainClock.advanceTimeBy(1000)
+        compose.waitForIdle()
         compose.onNodeWithTag("cut-minus").performClick()
         compose.runOnIdle { assertEquals(CutRange(250, 740), model.state.value.range) }
         compose.onNodeWithText("開始から試聴").performScrollTo()
         compose.onNodeWithTag("cutter").performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 180f) }
+        compose.mainClock.advanceTimeBy(1000)
+        compose.waitForIdle()
         compose.onNodeWithText("開始から試聴").performClick()
         compose.waitUntil(10_000) { !model.state.value.preparing }
         assertNull(model.state.value.message)
