@@ -15,6 +15,7 @@
 -keep,allowobfuscation class kotlin.** { public protected *; }
 -keep,allowobfuscation class kotlinx.coroutines.** { public protected *; }
 -keep,allowobfuscation class androidx.concurrent.futures.** { public protected *; }
+-keep,allowobfuscation class androidx.collection.** { public protected *; }
 -keep,allowobfuscation interface com.google.common.util.concurrent.ListenableFuture { *; }
 # AndroidJUnitRunner references this shared dependency by its original API.
 -keep,allowoptimization class androidx.tracing.** { *; }
