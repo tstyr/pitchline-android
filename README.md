@@ -4,7 +4,7 @@ Android 上で音声を読み込み、歌声の基音を解析してノートや
 
 ## APK の直接ダウンロード
 
-[Pitchline v0.3.0-debug.2 ARM64 APK（10.28 MB）をダウンロード](https://github.com/tstyr/pitchline-android/releases/download/v0.3.0-debug.2/Pitchline-v0.3.0-debug.2-arm64-debug.apk) · [SHA-256](https://github.com/tstyr/pitchline-android/releases/download/v0.3.0-debug.2/Pitchline-v0.3.0-debug.2-arm64-debug.apk.sha256) · [Release](https://github.com/tstyr/pitchline-android/releases/tag/v0.3.0-debug.2)
+[Pitchline v0.4.0-debug.1 ARM64 APK（10.29 MB）をダウンロード](https://github.com/tstyr/pitchline-android/releases/download/v0.4.0-debug.1/Pitchline-v0.4.0-debug.1-arm64-debug.apk) · [SHA-256](https://github.com/tstyr/pitchline-android/releases/download/v0.4.0-debug.1/Pitchline-v0.4.0-debug.1-arm64-debug.apk.sha256) · [Release](https://github.com/tstyr/pitchline-android/releases/tag/v0.4.0-debug.1)
 
 スマホのブラウザで APK のリンクを開いてください。チャット内のファイルプレビューを経由せず取得できます。配布用署名鍵は未設定のため、これは **テスト用 Debug 署名のプレリリース**です。R8 の最適化を有効にするため、アプリの `debuggable` は false にしています。Galaxy S26 実機での動作は未確認です。
 
@@ -151,3 +151,18 @@ APK は **77.54% 削減**しました。公開ファイルを認証なしで直�
 - 既存の 6 時間スパース WAV の区間処理、5 形式の読み込み、プロジェクト復元、ピッチ編集、両 CPU 分離モデルも成功。
 
 ローカルの縮小済み画面でも SAF から 2 分の検証用 WAV を開き、表示と 15 秒位置での分割を確認しました。Galaxy S26 実機と ARM64 実行は未確認です。広域の波形はサンプリングによる概略、試聴の境界精度は MediaPlayer に依存し、書き出しは再エンコードです。
+
+## v0.4.0-debug.1 の検証（解析前の分離・モデル接続待ち）
+
+音声選択後に分離するか確認し、分離したボーカルを最初の音程解析の対象にしました。原曲の解析は原曲への切り替え時に行います。モデルの取得先には公式と同じファイルの GitHub ミラーを追加し、HTTPS 転送、通信の期限、キャンセル時の切断を実装しました。接続・検証・推論準備を一括して「モデル確認中 0%」とせず、段階名・経過秒数・処理中の区間数を表示します。サービスの起動応答と終了状態も管理します。
+
+PC では Zenodo の両モデル URL への接続が 25 秒でタイムアウトし、0 bytes のままでした。報告された Galaxy の停止原因そのものはログがなく確定できません。GitHub ミラーの両モデルは認証なしで取得でき、公式 SHA-256 と一致しました。
+
+[タグビルド・検証・公開ログ](https://github.com/tstyr/pitchline-android/actions/runs/44917066065)。Debug／Compact の単体テスト各 **15 件**、Lint（エラー 0 件）、DSP が成功。Android 17（API 37.0、Pixel 6、x86_64）で R8 適用済みビルドの全 **10 件**が成功しています。
+
+- 新しい取得処理: HTTPS 転送とダウングレード拒否、SHA 不一致時に既存モデルを保護、停止した読み取りのタイムアウト、キャンセルでの切断・途中ファイル削除を模擬接続で検証。
+- 新しい画面: 確認前に解析が始まらないこと、「分離しない」からの解析・編集を確認。
+- 実際の Foreground Service: 標準分離を選んで新規取り込み、分離したボーカルの解析と表示を完了。原曲の解析ファイルがまだ作られていないことを確認し、原曲へ切り替えて初めて解析・保存した後、HQ 分離も追加完走。
+- 既存の読み込み・プロジェクト復元・書き出し・両 CPU 分離・カッターのテストも継続して成功。分離テスト音源は約 1.2 秒で、報告された 4 分の楽曲を完走させた検証ではありません。
+
+公開 APK は **10,288,439 bytes（10.29 MB／9.81 MiB）**、前版からの増加は 12,180 bytes。直接 URL から取得し、SHA-256 `b9cbc34ce2fc82d31490924f21374be40e337a2d44a1d51d4dd81c8d7bb62d0f`、v2 署名、ARM64 限定、DEX／ネイティブライブラリの圧縮、16 KiB ELF アラインメントを確認しました。公開 APK の DEX と ARM64 ライブラリは同じタグの検証用ビルドと一致しています。Galaxy S26 実機での動作は未確認です。
