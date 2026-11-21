@@ -34,7 +34,7 @@ with zipfile.ZipFile(args.apk) as archive:
                     alignment = struct.unpack_from("<Q", elf, header + 48)[0]
                     assert alignment >= 16384 and file_offset % 16384 == address % 16384, f"Not 16 KiB aligned: {entry.filename}"
     report = {"apk": args.apk.name, "bytes": args.apk.stat().st_size,
-              "sha256": hashlib.file_digest(args.apk.open("rb"), "sha256").hexdigest() if hasattr(hashlib, "file_digest") else hashlib.sha256(args.apk.read_bytes()).hexdigest()}
+              "sha256": hashlib.sha256(args.apk.read_bytes()).hexdigest()}
     for label, group in (("native", native), ("dex", dex)):
         report[label] = {"raw_bytes": sum(e.file_size for e in group),
                          "packed_bytes": sum(e.compress_size for e in group),
