@@ -9,11 +9,13 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.assertIsSelected
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertEquals
 import java.io.File
 
 class EditorUiTest {
@@ -36,9 +38,11 @@ class EditorUiTest {
         compose.onNodeWithTag("cut-end").performScrollTo().performTextReplacement("00:00:00.750")
         compose.onNodeWithTag("cut-end-apply").performClick()
         compose.waitUntil(5000) { model.state.value.range == CutRange(250, 750) }
+        compose.runOnIdle { assertEquals(CutEdge.END, model.state.value.edge) }
         compose.onNodeWithText("10 ms").performScrollTo().performClick()
+        compose.onNodeWithText("10 ms").assertIsSelected()
         compose.onNodeWithTag("cut-minus").performScrollTo().performClick()
-        compose.waitUntil(5000) { model.state.value.range == CutRange(250, 740) }
+        compose.runOnIdle { assertEquals(CutRange(250, 740), model.state.value.range) }
         compose.onNodeWithText("開始から試聴").performScrollTo().performClick()
         compose.waitUntil(10_000) { !model.state.value.preparing }
         assertNull(model.state.value.message)

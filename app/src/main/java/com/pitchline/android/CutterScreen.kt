@@ -19,6 +19,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -58,7 +63,7 @@ fun CutterScreen(onClose: () -> Unit, model: CutterModel = viewModel()) {
         onDispose { view.keepScreenOn = previous }
     }
     if (confirmClose) AlertDialog(onDismissRequest = { confirmClose = false },
-        title = { Text("書き出しを中止しますか？") }, text = { Text("途中の出力は削除します。元ファイルは変更しません。") },
+        title = { Text("書き出しを中止しますか？") }, text = { Text("書き出しを中止します。元ファイルは変更しません。") },
         confirmButton = { TextButton({ model.leave(); onClose() }) { Text("中止して戻る") } },
         dismissButton = { TextButton({ confirmClose = false }) { Text("続ける") } })
 
@@ -165,11 +170,15 @@ fun CutterScreen(onClose: () -> Unit, model: CutterModel = viewModel()) {
 @Composable
 private fun CutTimeField(label: String, text: String, onText: (String) -> Unit, enabled: Boolean, tag: String, apply: (String) -> Boolean) {
     var invalid by remember(text) { mutableStateOf(false) }
+    val focus = LocalFocusManager.current
+    val applyTime: () -> Unit = { invalid = !apply(text); if (!invalid) focus.clearFocus() }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(value = text, onValueChange = onText, singleLine = true,
             label = { Text("$label（時:分:秒.ミリ秒）") }, enabled = enabled, isError = invalid,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { applyTime() }),
             modifier = Modifier.weight(1f).testTag(tag))
-        TextButton(onClick = { invalid = !apply(text) }, enabled = enabled, modifier = Modifier.padding(top = 12.dp).testTag("$tag-apply")) { Text("適用") }
+        TextButton(onClick = applyTime, enabled = enabled, modifier = Modifier.padding(top = 12.dp).testTag("$tag-apply")) { Text("適用") }
     }
 }
 

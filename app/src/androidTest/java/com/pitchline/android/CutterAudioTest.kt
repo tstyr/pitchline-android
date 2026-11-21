@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CancellationException
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -16,6 +17,27 @@ import java.nio.ByteOrder.LITTLE_ENDIAN
 class CutterAudioTest {
     private val test = InstrumentationRegistry.getInstrumentation()
     private val context get() = test.targetContext
+
+    @Test fun cancellingCutKeepsOriginalAndRemovesTemporaryAndPartialFiles() = runBlocking {
+        val dir = File(context.cacheDir, "cut-cancel").apply { mkdirs() }
+        val before = context.cacheDir.listFiles().orEmpty().filter { it.name.startsWith("cut-export-") }.map { it.name }.toSet()
+        try {
+            val original = File(dir, "original.wav")
+            test.context.assets.open("reference.wav").use { input -> original.outputStream().use { input.copyTo(it) } }
+            val bytes = original.readBytes()
+            val source = CutterAudio.inspect(context, Uri.fromFile(original))
+            val output = File(dir, "cancelled.wav").apply { writeText("") }
+            try {
+                CutterAudio.export(context, source, CutRange(0, 1000), Uri.fromFile(output), ExportFormat.WAV) {
+                    if (it > 0.05f) throw CancellationException("Test cancellation during decoding")
+                }
+                fail("Cancellation must propagate")
+            } catch (_: CancellationException) { }
+            assertFalse(output.exists())
+            assertArrayEquals(bytes, original.readBytes())
+            assertEquals(before, context.cacheDir.listFiles().orEmpty().filter { it.name.startsWith("cut-export-") }.map { it.name }.toSet())
+        } finally { dir.deleteRecursively() }
+    }
 
     @Test fun selectedHalfSecondIsDecodedFromAllFiveInputFormats() = runBlocking {
         val dir = File(context.cacheDir, "cut-formats").apply { mkdirs() }
