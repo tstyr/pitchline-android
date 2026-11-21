@@ -128,7 +128,7 @@ private fun Pitchline(model: MainModel = viewModel()) {
     var exportSource by rememberSaveable { mutableStateOf(ExportSource.MIX) }
     var exportFormat by rememberSaveable { mutableStateOf(ExportFormat.WAV) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) model.import(uri)
+        if (uri != null) model.requestImport(uri)
     }
     val save = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
@@ -137,9 +137,12 @@ private fun Pitchline(model: MainModel = viewModel()) {
     }
     var requestedModel by rememberSaveable { mutableStateOf<SeparationMode?>(null) }
     var requestedModelOnly by rememberSaveable { mutableStateOf(false) }
+    var requestedImport by rememberSaveable { mutableStateOf(false) }
     val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-        requestedModel?.let { model.separate(it, requestedModelOnly) }
+        if (requestedImport) model.confirmImport(requestedModel)
+        else requestedModel?.let { model.separate(it, requestedModelOnly) }
         requestedModel = null
+        requestedImport = false
     }
     val open: () -> Unit = { picker.launch(arrayOf("audio/*", "application/ogg", "application/x-flac")) }
     val locked = session.work != null || session.separation != null
@@ -167,10 +170,13 @@ private fun Pitchline(model: MainModel = viewModel()) {
                         Column(Modifier.padding(horizontal = 16.dp, vertical = 9.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Label(progress.label, Modifier.weight(1f), fontSize = 13.sp)
-                                Mono("${progress.percent}%")
+                                Mono(if (progress.percent < 0) "${session.separation?.elapsedSeconds ?: 0}秒"
+                                    else "${progress.percent}%")
                                 if (progress.stoppable) TextButton(onClick = model::cancelWork) { Label("キャンセル") }
                             }
-                            LinearProgressIndicator(progress = { progress.percent / 100f },
+                            if (progress.percent < 0) LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth().padding(top = 5.dp), color = aqua)
+                            else LinearProgressIndicator(progress = { progress.percent / 100f },
                                 modifier = Modifier.fillMaxWidth().padding(top = 5.dp), color = aqua)
                         }
                     }
@@ -187,6 +193,15 @@ private fun Pitchline(model: MainModel = viewModel()) {
             }
         }
         val editor = session.editor
+        if (session.pendingImport != null) ImportDialog(model::dismissImport) { mode ->
+            if (mode != null && Build.VERSION.SDK_INT >= 33 &&
+                androidx.core.content.ContextCompat.checkSelfPermission(model.getApplication(), Manifest.permission.POST_NOTIFICATIONS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestedImport = true
+                requestedModel = mode
+                notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else model.confirmImport(mode)
+        }
         when (dialog) {
             "settings" -> SettingsDialog(session.prefs, model, !locked, { dialog = "" }, { dialog = "separate" })
             "separate" -> SeparationDialog(editor, model, !locked, { dialog = "" }) { mode, only ->
@@ -195,6 +210,7 @@ private fun Pitchline(model: MainModel = viewModel()) {
                     androidx.core.content.ContextCompat.checkSelfPermission(model.getApplication(), Manifest.permission.POST_NOTIFICATIONS)
                     != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                     requestedModel = mode
+                    requestedImport = false
                     requestedModelOnly = only
                     notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
                 } else model.separate(mode, only)
@@ -518,6 +534,31 @@ private fun SettingSwitch(label: String, value: Boolean, onChange: (Boolean) -> 
         Label(label, Modifier.weight(1f), fontSize = 13.sp)
         Switch(checked = value, onCheckedChange = onChange, modifier = Modifier.semantics { contentDescription = label })
     }
+}
+
+@Composable
+private fun ImportDialog(close: () -> Unit, start: (SeparationMode?) -> Unit) {
+    var mode by rememberSaveable { mutableStateOf<SeparationMode?>(SeparationMode.STANDARD) }
+    AlertDialog(onDismissRequest = close, title = { Label("解析前にボーカルを分離しますか？") }, containerColor = panel,
+        confirmButton = { Button({ start(mode) }, modifier = Modifier.testTag("import-start"), shape = shape) {
+            Label(if (mode == null) "そのまま解析" else "分離してから解析")
+        } }, dismissButton = { TextButton(close) { Label("キャンセル") } }, text = {
+            Column {
+                Label("伴奏入りの曲は、ボーカルを分離してから音程を解析します。", fontSize = 13.sp, color = dim)
+                (listOf<SeparationMode?>(SeparationMode.STANDARD, SeparationMode.HIGH, null)).forEach { option ->
+                    Row(Modifier.fillMaxWidth().clickable { mode = option }.testTag("import-${option?.key ?: "original"}")
+                        .padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(mode == option, { mode = option })
+                        Label(when (option) {
+                            SeparationMode.STANDARD -> "標準 · Open-Unmix"
+                            SeparationMode.HIGH -> "高品質 · Open-Unmix HQ"
+                            null -> "分離しない · ソロ音声など"
+                        }, fontSize = 14.sp)
+                    }
+                }
+                if (mode != null) Label("初回はモデルを約36 MB取得します。", fontSize = 12.sp, color = dim)
+            }
+        })
 }
 
 @Composable

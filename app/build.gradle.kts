@@ -16,7 +16,7 @@ android {
         minSdk = 28
         targetSdk = 36
         versionCode = providers.environmentVariable("PITCHLINE_VERSION_CODE").orNull?.toInt() ?: 1
-        versionName = providers.environmentVariable("PITCHLINE_VERSION").orElse("0.3.0").get()
+        versionName = providers.environmentVariable("PITCHLINE_VERSION").orElse("0.4.0").get()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += if (providers.gradleProperty("pitchlineEmulator").isPresent) {

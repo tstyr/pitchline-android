@@ -132,8 +132,12 @@ class EditorUiTest {
         lateinit var model: MainModel
         compose.runOnUiThread {
             model = ViewModelProvider(compose.activity)[MainModel::class.java]
-            model.import(Uri.fromFile(reference))
+            model.requestImport(Uri.fromFile(reference))
         }
+        compose.onNodeWithText("解析前にボーカルを分離しますか？").assertIsDisplayed()
+        compose.runOnIdle { assertNull(model.state.value.editor); assertNull(model.state.value.work) }
+        compose.onNodeWithTag("import-original").performClick()
+        compose.onNodeWithTag("import-start").performClick()
         compose.waitUntil(60_000) { model.state.value.editor != null && model.state.value.work == null }
         compose.onNodeWithTag("piano-roll").assertIsDisplayed()
         compose.onNodeWithContentDescription("ノート操作").performClick()
@@ -145,5 +149,49 @@ class EditorUiTest {
         compose.onNodeWithContentDescription("ホーム").performClick()
         compose.onNodeWithTag("home").assertIsDisplayed()
         reference.delete()
+    }
+
+    @Test fun separatesBeforeAnalysisThroughTheForegroundServiceAndCanOpenTheOriginalLater() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.uiAutomation.executeShellCommand("pm grant com.pitchline.android android.permission.POST_NOTIFICATIONS").use {
+            java.io.FileInputStream(it.fileDescriptor).use { stream -> stream.readBytes() }
+        }
+        val reference = File(compose.activity.cacheDir, "separate-first.wav")
+        instrumentation.context.assets.open("reference.wav").use { input -> reference.outputStream().use { input.copyTo(it) } }
+        lateinit var model: MainModel
+        compose.runOnUiThread {
+            model = ViewModelProvider(compose.activity)[MainModel::class.java]
+            model.requestImport(Uri.fromFile(reference))
+        }
+        compose.onNodeWithTag("import-standard").assertIsDisplayed()
+        compose.onNodeWithTag("import-high").assertIsDisplayed()
+        compose.runOnIdle { assertNull(model.state.value.editor); assertNull(model.state.value.work) }
+        compose.onNodeWithTag("import-start").performClick()
+        compose.waitUntil(180_000) {
+            model.state.value.editor?.project?.source == "standard" && model.state.value.work == null && model.state.value.separation == null
+        }
+        val project = model.state.value.editor!!.project
+        val store = ProjectStore(compose.activity)
+        try {
+            assertTrue(!project.originalAnalyzed)
+            assertTrue(project.original.notes.isEmpty())
+            assertTrue(!File(store.directory(project.id), "pitch-original.bin").exists())
+            assertTrue(project.stems.containsKey("standard"))
+            compose.onNodeWithTag("piano-roll").assertIsDisplayed()
+            compose.runOnUiThread { model.useSource("original") }
+            compose.waitUntil(30_000) { model.state.value.editor?.project?.originalAnalyzed == true && model.state.value.work == null }
+            assertEquals("original", model.state.value.editor!!.project.source)
+            assertTrue(model.state.value.editor!!.project.original.notes.isNotEmpty())
+            compose.runOnUiThread { model.separate(SeparationMode.HIGH, false) }
+            compose.waitUntil(180_000) {
+                model.state.value.editor?.project?.source == "high" && model.state.value.work == null && model.state.value.separation == null
+            }
+            assertTrue(model.state.value.editor!!.project.stems.keys.containsAll(listOf("standard", "high")))
+            assertTrue(store.load(project.id).originalAnalyzed)
+        } finally {
+            compose.runOnUiThread { model.home() }
+            store.deleteProject(project.id)
+            reference.delete()
+        }
     }
 }

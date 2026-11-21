@@ -6,13 +6,11 @@ import ai.onnxruntime.OrtSession
 import android.content.Context
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
-import java.net.SocketException
-import java.net.SocketTimeoutException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
@@ -38,76 +36,62 @@ class ModelStore(private val context: Context) {
     fun delete(mode: SeparationMode) = weight(mode).delete()
     private fun weight(mode: SeparationMode) = File(directory, "${mode.key}.pth")
 
-    suspend fun prepare(mode: SeparationMode, progress: Progress): File {
+    suspend fun prepare(mode: SeparationMode, progress: Progress): File = prepareDetailed(mode) {
+        it.fraction?.let(progress)
+    }
+
+    suspend fun prepareDetailed(mode: SeparationMode, report: (ModelProgress) -> Unit): File = withContext(Dispatchers.IO) {
         val checkpoint = weight(mode)
-        if (!downloaded(mode) || sha256(checkpoint) != mode.sha256) {
-            var retries = 0
-            while (true) {
+        report(ModelProgress("モデルの保存状態を確認中"))
+        if (!downloaded(mode) || sha256(checkpoint) { report(ModelProgress("保存済みモデルを検証中", it)) } != mode.sha256) {
+            val mirror = "https://github.com/tstyr/pitchline-android/releases/download/models-v1/${mode.key}.pth"
+            val sources = listOf(mirror, mode.url, mirror)
+            for ((index, url) in sources.withIndex()) {
                 try {
-                    download(mode, checkpoint, progress)
+                    ModelDownload().fetch(url, checkpoint, bytes, mode.sha256, report)
                     break
-                } catch (error: Exception) {
-                    if (error is CancellationException) throw error
-                    val temporary = error is SocketTimeoutException || error is SocketException ||
-                        error.message.orEmpty().contains("(HTTP 5") || error.message.orEmpty().contains("(HTTP 429)")
-                    if (!temporary || retries >= 2) throw error
-                    delay(if (retries++ == 0) 1000L else 3000L)
+                } catch (error: IOException) {
+                    currentCoroutineContext().ensureActive()
+                    if (index == sources.lastIndex) throw IOException("モデル配布先に接続できません。通信を確認して再試行してください: ${error.message}", error)
+                    report(ModelProgress("接続できないため別の配布先を試します"))
+                    delay(750)
                 }
             }
         }
+        report(ModelProgress("推論モデルを準備中"))
         val graph = File(directory, "${mode.key}.onnx")
         val partial = File(directory, "${mode.key}.onnx.part")
         try {
             context.assets.open("models/${mode.key}.onnx").use { input ->
-                partial.outputStream().use { input.copyTo(it) }
+                partial.outputStream().use { output ->
+                    val buffer = ByteArray(32_768)
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                    }
+                }
             }
             require(partial.renameTo(graph)) { "モデルを保存できません" }
         } finally {
             partial.delete()
         }
-        return graph
+        graph
     }
 
-    private suspend fun download(mode: SeparationMode, destination: File, progress: Progress) {
-        val connection = URL(mode.url).openConnection() as HttpURLConnection
-        val partial = File(directory, "${mode.key}.pth.part")
-        try {
-            connection.connectTimeout = 12_000
-            connection.readTimeout = 12_000
-            connection.instanceFollowRedirects = false
-            require(connection.responseCode == 200) { "モデルを取得できません (HTTP ${connection.responseCode})" }
-            connection.inputStream.use { input ->
-                partial.outputStream().buffered().use { output ->
-                    val buffer = ByteArray(65_536)
-                    var total = 0L
-                    while (true) {
-                        currentCoroutineContext().ensureActive()
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        total += count
-                        require(total <= bytes) { "モデルのサイズが一致しません" }
-                        output.write(buffer, 0, count)
-                        progress(total.toFloat() / bytes)
-                    }
-                }
-            }
-            require(partial.length() == bytes && sha256(partial) == mode.sha256) { "モデルの SHA-256 が一致しません" }
-            require(partial.renameTo(destination)) { "モデルを保存できません" }
-        } finally {
-            connection.disconnect()
-            partial.delete()
-        }
-    }
-
-    private suspend fun sha256(file: File): String {
+    private suspend fun sha256(file: File, progress: Progress): String {
         val hash = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
             val buffer = ByteArray(65_536)
+            var total = 0L
             while (true) {
                 currentCoroutineContext().ensureActive()
                 val count = input.read(buffer)
                 if (count < 0) break
                 hash.update(buffer, 0, count)
+                total += count
+                progress(total.toFloat() / bytes)
             }
         }
         return hash.digest().joinToString("") { "%02x".format(it) }
@@ -121,7 +105,7 @@ object Separator {
 
     suspend fun separate(
         graph: File, source: File, vocal: File, backing: File,
-        info: AudioInfo, mode: SeparationMode, progress: Progress,
+        info: AudioInfo, mode: SeparationMode, stage: (String) -> Unit = {}, progress: Progress,
     ) {
         val env = OrtEnvironment.getEnvironment()
         val channels = info.channels
@@ -132,6 +116,7 @@ object Separator {
             options.setIntraOpNumThreads((Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4))
             options.setInterOpNumThreads(1)
             options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+            stage("推論エンジンを準備中")
             env.createSession(graph.absolutePath, options).use { session ->
                 PcmReader(source, channels).use { reader ->
                     PcmWriter(vocal).use { voice ->
@@ -140,6 +125,7 @@ object Separator {
                             var previous = FloatArray(0)
                             while (start < info.frames) {
                                 currentCoroutineContext().ensureActive()
+                                stage("ボーカル分離 ${start / chunk + 1} / ${(info.frames + chunk - 1) / chunk}")
                                 val coreEnd = minOf(start + chunk, info.frames)
                                 val end = minOf(coreEnd + overlap, info.frames)
                                 val inputStart = (start - pad).coerceAtLeast(0)

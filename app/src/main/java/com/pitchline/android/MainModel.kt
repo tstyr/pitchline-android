@@ -41,6 +41,7 @@ data class Session(
     val playing: Boolean = false,
     val looping: Boolean = false,
     val loopRange: IntRange? = null,
+    val pendingImport: Uri? = null,
 )
 class MainModel(application: Application) : AndroidViewModel(application) {
     private val app = application
@@ -68,15 +69,18 @@ class MainModel(application: Application) : AndroidViewModel(application) {
                     is SeparationStatus.Running -> mutable.update { it.copy(separation = status) }
                     is SeparationStatus.Finished -> {
                         val current = state.value.editor
-                        if (status.id != null && current?.project?.id == status.id) {
+                        if (status.id != null && (status.openResult || current?.project?.id == status.id)) {
                             val updated = runCatching { withContext(Dispatchers.IO) {
                                 val project = store.load(status.id)
                                 EditorState(project, store.readAnalysis(project))
                             } }
-                            updated.onSuccess { editor -> mutable.update { it.copy(editor = editor, loopRange = null) } }
+                            updated.onSuccess { editor ->
+                                if (status.openResult) setEditor(editor) else mutable.update { it.copy(editor = editor, loopRange = null) }
+                            }
                                 .onFailure { message(it.message ?: "分離結果を開けません") }
                         }
                         mutable.update { it.copy(separation = null, message = status.message) }
+                        SeparationService.consumed(status)
                         refresh()
                     }
                 }
@@ -92,8 +96,26 @@ class MainModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(recent = recent) }
     }
 
-    fun import(uri: Uri) {
+    fun requestImport(uri: Uri) {
+        if (locked()) return
+        finishGesture()
         stopPlayback()
+        mutable.update { it.copy(pendingImport = uri) }
+    }
+    fun dismissImport() { mutable.update { it.copy(pendingImport = null) } }
+    fun confirmImport(mode: SeparationMode?) {
+        val uri = state.value.pendingImport ?: return
+        dismissImport()
+        import(uri, mode)
+    }
+
+    fun import(uri: Uri, mode: SeparationMode? = null) {
+        if (locked()) return
+        stopPlayback()
+        if (mode != null) {
+            launchSeparation { SeparationService.import(app, mode, uri) }
+            return
+        }
         val id = store.newId()
         work("音声を読み込み中") {
             val context = currentCoroutineContext()
@@ -352,10 +374,15 @@ class MainModel(application: Application) : AndroidViewModel(application) {
     fun useSource(key: String) {
         val editor = state.value.editor ?: return
         if (editor.project.source == key || locked()) return
-        val next = editor.project.copy(source = key)
+        var next = editor.project.copy(source = key)
         stopPlayback()
         work("解析結果を開いています", false) {
-            val analysis = store.readAnalysis(next)
+            val analysis = if (key == "original" && !next.originalAnalyzed) {
+                Processing.analyze(store.original(next.id), next.info) { progress("原曲の音程を解析中", it) }.also {
+                    store.writeAnalysis(next.id, "original", it)
+                    next = next.copy(original = NoteHistory(segment(it)), originalAnalyzed = true)
+                }
+            } else store.readAnalysis(next)
             withContext(Dispatchers.Main) {
                 change(next, emptySet(), save = true)
                 mutable.update { it.copy(editor = it.editor?.copy(analysis = analysis), listen = Listen.MIX,
@@ -406,13 +433,16 @@ class MainModel(application: Application) : AndroidViewModel(application) {
         }
         finishGesture()
         stopPlayback()
+        launchSeparation { SeparationService.start(app, mode, if (modelOnly) null else editor?.project?.id) }
+    }
+
+    private fun launchSeparation(start: suspend () -> Unit) {
         worker = viewModelScope.launch {
             mutable.update { it.copy(work = WorkStatus("分離の準備中", 0, false)) }
             try {
                 saveJob?.join()
                 playingJob?.join()
-                SeparationService.start(app, mode, if (modelOnly) null else editor?.project?.id)
-                mutable.update { it.copy(separation = SeparationStatus.Running("モデルを確認中", 0)) }
+                start()
             } catch (error: Exception) {
                 message(error.message ?: "分離を開始できません")
             } finally {

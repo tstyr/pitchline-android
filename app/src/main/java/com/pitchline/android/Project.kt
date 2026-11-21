@@ -33,6 +33,7 @@ data class Project(
     val scale: MusicalScale = MusicalScale(),
     val modified: Long = System.currentTimeMillis(),
     val version: Int = 1,
+    val originalAnalyzed: Boolean = true,
 ) {
     val activeStems get() = stems[source]
     val history get() = activeStems?.history ?: original
