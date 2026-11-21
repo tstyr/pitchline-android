@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import struct
 from pathlib import Path
 import zipfile
 
@@ -21,6 +22,17 @@ with zipfile.ZipFile(args.apk) as archive:
         assert args.apk.stat().st_size < 15_000_000, "Compact APK exceeds 15 MB size budget"
     if args.arm64:
         assert {e.filename.split('/')[1] for e in native} == {"arm64-v8a"}, "Expected ARM64 only"
+        for entry in native:
+            elf = archive.read(entry)
+            assert elf[:6] == b"\x7fELF\x02\x01", "Expected little-endian ELF64"
+            offset = struct.unpack_from("<Q", elf, 32)[0]
+            stride, count = struct.unpack_from("<HH", elf, 54)
+            for index in range(count):
+                header = offset + index * stride
+                if struct.unpack_from("<I", elf, header)[0] == 1:  # PT_LOAD
+                    file_offset, address = struct.unpack_from("<QQ", elf, header + 8)
+                    alignment = struct.unpack_from("<Q", elf, header + 48)[0]
+                    assert alignment >= 16384 and file_offset % 16384 == address % 16384, f"Not 16 KiB aligned: {entry.filename}"
     report = {"apk": args.apk.name, "bytes": args.apk.stat().st_size,
               "sha256": hashlib.file_digest(args.apk.open("rb"), "sha256").hexdigest() if hasattr(hashlib, "file_digest") else hashlib.sha256(args.apk.read_bytes()).hexdigest()}
     for label, group in (("native", native), ("dex", dex)):

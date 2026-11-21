@@ -43,6 +43,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            testProguardFiles("test-proguard-rules.pro")
         }
         // Same optimizer and packaging as release, signed with a disposable debug key.
         create("compact") {
