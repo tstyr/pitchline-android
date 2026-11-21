@@ -19,14 +19,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 
 data class CutterState(
-    val source: CutAudio? = null, val range: CutRange? = null,
-    val edge: CutEdge = CutEdge.START, val window: CutRange? = null,
-    val peaks: FloatArray? = null, val waveLoading: Boolean = false, val waveError: String? = null,
+    val source: CutAudio? = null, val edit: CutEdit = CutEdit(emptyList()), val window: CutRange? = null,
+    val peaks: FloatArray? = null, val waveLoading: Boolean = false, val waveError: Boolean = false,
     val loading: Boolean = false, val exporting: Boolean = false, val percent: Int = 0,
-    val playing: Boolean = false, val preparing: Boolean = false, val positionMs: Long = 0,
-    val message: String? = null,
+    val playing: Boolean = false, val preparing: Boolean = false,
+    val undoCount: Int = 0, val redoCount: Int = 0, val message: String? = null,
 )
 
 class CutterModel(application: Application, private val saved: SavedStateHandle) : AndroidViewModel(application) {
@@ -39,7 +39,11 @@ class CutterModel(application: Application, private val saved: SavedStateHandle)
     private var playbackJob: Job? = null
     private var player: MediaPlayer? = null
     private var focus: AudioFocusRequest? = null
-    private var loadRevision = 0
+    private var navigationResume = false
+    private val undo = ArrayDeque<CutEdit>()
+    private val redo = ArrayDeque<CutEdit>()
+    private data class WaveKey(val uri: String, val clips: List<CutRange>, val window: CutRange)
+    private val waveCache = linkedMapOf<WaveKey, FloatArray>()
 
     init { saved.get<String>("cut-uri")?.let { open(Uri.parse(it), restore = true) } }
 
@@ -48,19 +52,21 @@ class CutterModel(application: Application, private val saved: SavedStateHandle)
         stop()
         openJob?.cancel()
         waveJob?.cancel()
-        val revision = ++loadRevision
+        undo.clear(); redo.clear(); waveCache.clear()
         mutable.value = CutterState(loading = true)
         openJob = viewModelScope.launch {
             try {
                 val source = withContext(Dispatchers.IO) { CutterAudio.inspect(app, uri) }
-                if (revision != loadRevision) return@launch
                 runCatching { app.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-                val first = if (restore) (saved.get<Long>("cut-start") ?: 0L).coerceIn(0, source.durationMs - 1) else 0L
-                val end = if (restore) (saved.get<Long>("cut-end") ?: source.durationMs).coerceIn(first + 1, source.durationMs) else source.durationMs
-                val range = CutRange(first, end)
-                mutable.value = CutterState(source, range, window = cutWindow(source.durationMs, first, 30_000), positionMs = first)
+                val clips = if (restore) restoreClips(source) else listOf(CutRange(0, source.durationMs))
+                val duration = clips.sumOf { it.lengthMs }
+                val position = if (restore) (saved.get<Long>("cut-position") ?: 0L).coerceIn(0, duration) else 0L
+                val selected = if (restore) saved.get<Long>("cut-selected") else clips.firstOrNull()?.startMs
+                val edit = CutEdit(clips, position, selected?.takeIf { id -> clips.any { it.startMs == id } } ?: clips.firstOrNull()?.startMs)
+                val span = if (restore) saved.get<Long>("cut-span") ?: 30_000L else 30_000L
+                mutable.value = CutterState(source, edit, window = windowFor(edit, span))
                 saved["cut-uri"] = uri.toString()
-                saveRange(range)
+                saveEdit(edit)
                 requestWave()
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
@@ -68,166 +74,234 @@ class CutterModel(application: Application, private val saved: SavedStateHandle)
             }
         }
     }
+    private fun restoreClips(source: CutAudio): List<CutRange> = runCatching {
+        val starts = saved.get<LongArray>("cut-clips-start")
+        val ends = saved.get<LongArray>("cut-clips-end")
+        if (starts != null && ends != null) {
+            require(starts.size == ends.size && starts.size <= 2000)
+            val clips = starts.indices.map { CutRange(starts[it], ends[it]) }
+            require(clips.all { it.endMs <= source.durationMs })
+            CutEdit(clips).clips
+        } else {
+            val first = (saved.get<Long>("cut-start") ?: 0L).coerceIn(0, source.durationMs - 1)
+            val end = (saved.get<Long>("cut-end") ?: source.durationMs).coerceIn(first + 1, source.durationMs)
+            listOf(CutRange(first, end))
+        }
+    }.getOrElse { listOf(CutRange(0, source.durationMs)) }
 
-    private fun saveRange(range: CutRange) { saved["cut-start"] = range.startMs; saved["cut-end"] = range.endMs }
-    fun edge(edge: CutEdge) {
-        mutable.update { it.copy(edge = edge) }
-        showBoundary()
+    private fun saveEdit(edit: CutEdit) {
+        saved["cut-clips-start"] = edit.clips.map { it.startMs }.toLongArray()
+        saved["cut-clips-end"] = edit.clips.map { it.endMs }.toLongArray()
+        saved["cut-selected"] = edit.selected
+        saved["cut-position"] = edit.positionMs
     }
-    fun setBoundary(edge: CutEdge, value: Long, exact: Boolean = false): Boolean {
-        val s = state.value
-        val range = s.range ?: return false
-        val source = s.source ?: return false
-        if (s.exporting) return false
-        val low = if (edge == CutEdge.START) 0L else range.startMs + 1
-        val high = if (edge == CutEdge.START) range.endMs - 1 else source.durationMs
-        if (exact && value !in low..high) {
-            message("開始 < 終了となる、ファイル内の時刻を入力してください")
-            return false
+    private fun windowFor(edit: CutEdit, span: Long): CutRange? = if (edit.durationMs == 0L) null
+        else cutWindow(edit.durationMs, edit.positionMs, span.coerceIn(minOf(250L, edit.durationMs), edit.durationMs))
+
+    private fun changeEdit(edit: CutEdit, remember: Boolean = true) {
+        if (state.value.exporting || edit == state.value.edit) return
+        stop()
+        if (remember) {
+            undo.addLast(state.value.edit)
+            while (undo.size > 40) undo.removeFirst()
+            redo.clear()
         }
-        val next = if (edge == CutEdge.START) range.copy(startMs = value.coerceIn(low, high))
-            else range.copy(endMs = value.coerceIn(low, high))
-        mutable.update { it.copy(range = next, edge = edge) }
-        saveRange(next)
-        showBoundary()
+        val window = windowFor(edit, state.value.window?.lengthMs ?: 30_000)
+        mutable.update { it.copy(edit = edit, window = window, undoCount = undo.size, redoCount = redo.size) }
+        saveEdit(edit)
+        requestWave()
+    }
+    fun split() { if (state.value.edit.canSplit) changeEdit(state.value.edit.split()) }
+    fun deleteSelected() { changeEdit(state.value.edit.deleteSelected()) }
+    fun undo() {
+        if (state.value.exporting || undo.isEmpty()) return
+        redo.addLast(state.value.edit)
+        changeEdit(undo.removeLast(), remember = false)
+    }
+    fun redo() {
+        if (state.value.exporting || redo.isEmpty()) return
+        undo.addLast(state.value.edit)
+        changeEdit(redo.removeLast(), remember = false)
+    }
+
+    fun seek(timeMs: Long, select: Boolean = false) {
+        if (state.value.exporting) return
+        val resume = state.value.playing || state.value.preparing
+        if (resume) stop()
+        val edit = state.value.edit.seek(timeMs, select)
+        val old = state.value.window
+        val window = if (old == null || edit.positionMs !in old.startMs..old.endMs) windowFor(edit, old?.lengthMs ?: 30_000) else old
+        mutable.update { it.copy(edit = edit, window = window) }
+        saved["cut-position"] = edit.positionMs
+        saved["cut-selected"] = edit.selected
+        if (window != old) requestWave()
+        if (resume) play()
+    }
+    fun jump(text: String): Boolean {
+        val value = parseCutTime(text)
+        if (value == null || value > state.value.edit.durationMs) { message("時刻を確認してください"); return false }
+        seek(value, select = true)
         return true
     }
-    fun setTime(edge: CutEdge, text: String): Boolean {
-        val value = parseCutTime(text) ?: run { message("時:分:秒.ミリ秒で入力してください（例 02:15:30.500）"); return false }
-        return setBoundary(edge, value, exact = true)
+    fun skip(delta: Long) { seek(state.value.edit.positionMs + delta) }
+    fun beginNavigation() {
+        navigationResume = state.value.playing || state.value.preparing
+        stopPlayer()
     }
-    fun setRangeText(start: String, end: String): Boolean {
-        val source = state.value.source ?: return false
-        if (state.value.exporting) return false
-        val first = parseCutTime(start)
-        val last = parseCutTime(end)
-        if (first == null || last == null || first >= last || last > source.durationMs) {
-            message("開始・終了を時:分:秒.ミリ秒で入力してください。0 ≤ 開始 < 終了 ≤ 全長にしてください")
-            return false
-        }
-        val range = CutRange(first, last)
-        mutable.update { it.copy(range = range) }
-        saveRange(range)
-        showBoundary()
-        return true
+    fun endNavigation() {
+        val resume = navigationResume
+        navigationResume = false
+        if (resume) play()
     }
-    fun nudge(delta: Long) {
+    fun transform(panFraction: Double, zoom: Double, focal: Double) {
         val s = state.value
-        val range = s.range ?: return
-        setBoundary(s.edge, (if (s.edge == CutEdge.START) range.startMs else range.endMs) + delta)
+        val old = s.window ?: return
+        if (s.exporting) return
+        val window = transformCutWindow(s.edit.durationMs, old, panFraction, zoom, focal)
+        val at = if (abs(zoom - 1) < 0.0001) s.edit.positionMs + window.startMs - old.startMs else s.edit.positionMs
+        val edit = s.edit.seek(at.coerceIn(window.startMs, window.endMs))
+        mutable.update { it.copy(edit = edit, window = window) }
+        saved["cut-position"] = edit.positionMs
+        saved["cut-span"] = window.lengthMs
+        if (window != old) requestWave()
     }
-    private fun showBoundary() {
-        val s = state.value
-        val range = s.range ?: return
-        val window = s.window ?: return
-        val at = if (s.edge == CutEdge.START) range.startMs else range.endMs
-        if (at !in window.startMs..window.endMs) setWindow(cutWindow(requireNotNull(s.source).durationMs, at, window.lengthMs))
-    }
-    fun zoom(factor: Double) {
-        val s = state.value
-        val source = s.source ?: return
-        val range = s.range ?: return
-        val span = ((s.window?.lengthMs ?: 30_000) * factor).toLong().coerceIn(minOf(1000L, source.durationMs), source.durationMs)
-        val at = if (s.edge == CutEdge.START) range.startMs else range.endMs
-        setWindow(cutWindow(source.durationMs, at, span))
-    }
-    fun showAll() { state.value.source?.let { setWindow(CutRange(0, it.durationMs)) } }
-    fun showSelection() { state.value.range?.let { setWindow(it) } }
-    private fun setWindow(window: CutRange) {
-        mutable.update { it.copy(window = window) }
+    fun showAll() {
+        val edit = state.value.edit
+        if (edit.durationMs == 0L) return
+        mutable.update { it.copy(window = CutRange(0, edit.durationMs)) }
+        saved["cut-span"] = edit.durationMs
         requestWave()
     }
     private fun requestWave() {
         waveJob?.cancel()
         val source = state.value.source ?: return
-        val window = state.value.window ?: return
-        mutable.update { it.copy(peaks = null, waveError = null, waveLoading = window.lengthMs <= 30_000) }
-        if (window.lengthMs > 30_000) return
+        val edit = state.value.edit
+        val window = state.value.window ?: run { mutable.update { it.copy(peaks = null, waveLoading = false) }; return }
+        val key = WaveKey(source.uri.toString(), edit.clips, window)
+        val cached = waveCache[key]
+        mutable.update { it.copy(peaks = cached, waveError = false, waveLoading = cached == null) }
+        if (cached != null) return
         waveJob = viewModelScope.launch {
             try {
-                delay(350)
-                val peaks = withContext(Dispatchers.IO) { CutterAudio.waveform(app, source, window) }
+                delay(180)
+                val peaks = withContext(Dispatchers.IO) {
+                    CutterAudio.timelineWaveform(app, source, edit, window) { partial ->
+                        mutable.update { current ->
+                            if (current.source?.uri == source.uri && current.edit.clips == edit.clips && current.window == window)
+                                current.copy(peaks = partial) else current
+                        }
+                    }
+                }
+                waveCache[key] = peaks
+                while (waveCache.size > 12) waveCache.remove(waveCache.keys.first())
                 mutable.update { it.copy(peaks = peaks, waveLoading = false) }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                mutable.update { it.copy(waveLoading = false, waveError = "波形を表示できません。時刻指定と書き出しは利用できます") }
+                mutable.update { it.copy(waveLoading = false, waveError = true) }
             }
         }
     }
 
-    fun preview(nearEnd: Boolean = false) {
+    fun togglePlay() { if (state.value.playing || state.value.preparing) stop() else play() }
+    private fun play() {
         val s = state.value
         val source = s.source ?: return
-        val range = s.range ?: return
-        if (s.exporting) return
-        stop()
-        val from = if (nearEnd) maxOf(range.startMs, range.endMs - 5000) else range.startMs
-        val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
+        if (s.exporting || s.edit.durationMs == 0L) return
+        stopPlayer()
+        val edit = if (s.edit.positionMs >= s.edit.durationMs) s.edit.seek(0) else s.edit
+        mutable.update { it.copy(edit = edit, preparing = true) }
+        val pieces = edit.pieces
+        var index = pieces.indexOf(requireNotNull(edit.locate(edit.positionMs)))
+        val from = pieces[index].source.startMs + edit.positionMs - pieces[index].startMs
+        val attrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
         val manager = app.getSystemService(AudioManager::class.java)
-        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(attributes)
+        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(attrs)
             .setOnAudioFocusChangeListener { if (it < 0) stop() }.build()
-        if (manager.requestAudioFocus(request) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { message("音声出力を開始できません"); return }
+        if (manager.requestAudioFocus(request) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { stop(); message("音声出力を開始できません"); return }
         focus = request
-        mutable.update { it.copy(preparing = true, positionMs = from) }
         try {
             val next = MediaPlayer()
             player = next
-            next.setAudioAttributes(attributes)
-            next.setOnErrorListener { _, _, _ -> stop(); message("この音声の試聴を開始できません"); true }
-            next.setOnCompletionListener { stop() }
+            var seeking = true
+            fun finished() {
+                mutable.update { it.copy(edit = it.edit.seek(edit.durationMs)) }
+                saved["cut-position"] = edit.durationMs
+                stop()
+            }
+            fun advance() {
+                if (index == pieces.lastIndex) { finished(); return }
+                val previous = pieces[index++]
+                val following = pieces[index]
+                if (previous.source.endMs != following.source.startMs) {
+                    next.pause()
+                    seeking = true
+                    next.seekTo(following.source.startMs, MediaPlayer.SEEK_CLOSEST)
+                }
+            }
+            next.setAudioAttributes(attrs)
+            next.setOnErrorListener { _, _, _ -> stop(); message("再生できません"); true }
+            next.setOnCompletionListener { if (index < pieces.lastIndex) advance() else finished() }
             next.setOnPreparedListener { if (player === it) it.seekTo(from, MediaPlayer.SEEK_CLOSEST) }
             next.setOnSeekCompleteListener {
                 if (player === it) {
+                    seeking = false
                     it.start()
                     mutable.update { value -> value.copy(preparing = false, playing = true) }
-                    playbackJob = viewModelScope.launch {
+                    if (playbackJob?.isActive != true) playbackJob = viewModelScope.launch {
                         while (player === next) {
-                            val position = next.currentPosition.toLong()
-                            mutable.update { value -> value.copy(positionMs = position) }
-                            if (position >= (state.value.range?.endMs ?: range.endMs)) { stop(); break }
-                            delay(40)
+                            if (!seeking) {
+                                val original = next.currentPosition.toLong()
+                                val piece = pieces[index]
+                                if (original >= piece.source.endMs) advance()
+                                else {
+                                    val at = (piece.startMs + original - piece.source.startMs).coerceIn(piece.startMs, piece.endMs)
+                                    val old = state.value.window
+                                    val window = if (old != null && at > old.startMs + old.lengthMs * 9 / 10 && at < edit.durationMs)
+                                        cutWindow(edit.durationMs, at + old.lengthMs / 4, old.lengthMs) else old
+                                    mutable.update { value -> value.copy(edit = value.edit.seek(at), window = window) }
+                                    saved["cut-position"] = at
+                                    if (window != old) requestWave()
+                                }
+                            }
+                            delay(20)
                         }
                     }
                 }
             }
             next.setDataSource(app, source.uri)
             next.prepareAsync()
-        } catch (error: Exception) { stop(); message("試聴エラー: ${error.message.orEmpty()}") }
+        } catch (error: Exception) { stop(); message("再生エラー: ${error.message.orEmpty()}") }
     }
-    fun stop() {
-        playbackJob?.cancel()
-        player?.release()
-        player = null
-        focus?.let { app.getSystemService(AudioManager::class.java).abandonAudioFocusRequest(it) }
-        focus = null
+    private fun stopPlayer() {
+        playbackJob?.cancel(); playbackJob = null
+        player?.release(); player = null
+        focus?.let { app.getSystemService(AudioManager::class.java).abandonAudioFocusRequest(it) }; focus = null
         mutable.update { it.copy(playing = false, preparing = false) }
     }
+    fun stop() { navigationResume = false; stopPlayer() }
     fun message(text: String?) { mutable.update { it.copy(message = text) } }
     fun resumeUi() { if (!state.value.exporting && state.value.source != null && state.value.peaks == null) requestWave() }
     fun suspendUi() { stop(); waveJob?.cancel(); mutable.update { it.copy(waveLoading = false) } }
-    fun leave() { stop(); waveJob?.cancel(); exportJob?.cancel() }
+    fun leave() { suspendUi(); exportJob?.cancel() }
     fun cancelExport() { exportJob?.cancel() }
     fun export(destination: Uri, format: ExportFormat) {
         val s = state.value
         val source = s.source ?: return
-        val range = s.range ?: return
-        if (s.exporting) return
-        stop()
-        waveJob?.cancel()
+        if (s.exporting || s.edit.clips.isEmpty()) return
+        stop(); waveJob?.cancel()
         mutable.update { it.copy(exporting = true, percent = 0, waveLoading = false, message = null) }
         exportJob = viewModelScope.launch {
             try {
                 waveJob?.join()
                 withContext(Dispatchers.IO) {
-                    CutterAudio.export(app, source, range, destination, format) { fraction ->
-                        val percent = (fraction.coerceIn(0f, 1f) * 100).toInt()
+                    CutterAudio.exportClips(app, source, s.edit.clips, destination, format) { value ->
+                        val percent = (value.coerceIn(0f, 1f) * 100).toInt()
                         mutable.update { if (it.percent == percent) it else it.copy(percent = percent) }
                     }
                 }
-                message("選択した ${cutTime(range.lengthMs)} を保存しました")
-            } catch (_: CancellationException) { message("書き出しを中止しました") }
-            catch (error: Exception) { message("書き出しエラー: ${error.message.orEmpty()}") }
+                message("保存しました")
+            } catch (_: CancellationException) { message("保存を中止しました") }
+            catch (error: Exception) { message("保存エラー: ${error.message.orEmpty()}") }
             finally { mutable.update { it.copy(exporting = false) } }
         }
     }

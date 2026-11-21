@@ -84,6 +84,7 @@ jobs:
           path: |
             app/build/outputs/androidTest-results/
             app/build/reports/androidTests/
+            app/build/outputs/ui-screenshots/
             app/build/outputs/mapping/compact/
 
   release:

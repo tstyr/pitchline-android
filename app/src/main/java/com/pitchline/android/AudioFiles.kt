@@ -12,6 +12,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import java.io.BufferedInputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -42,8 +43,8 @@ class PcmReader(file: File, private val channels: Int) : PcmSource {
     override fun close() = handle.close()
 }
 
-class PcmWriter(file: File) : AutoCloseable {
-    private val stream = file.outputStream().buffered()
+class PcmWriter(file: File, append: Boolean = false) : AutoCloseable {
+    private val stream = FileOutputStream(file, append).buffered()
     private var storage = ByteArray(0)
     fun write(data: FloatArray, offset: Int = 0, count: Int = data.size - offset) {
         val bytes = count * 4
@@ -61,10 +62,13 @@ object AudioImport {
     suspend fun decodeRange(context: Context, uri: Uri, output: File, range: CutRange, progress: Progress): AudioInfo =
         decodeSelected(context, uri, output, range, progress)
 
-    private suspend fun decodeSelected(context: Context, uri: Uri, output: File, range: CutRange?, progress: Progress): AudioInfo {
+    suspend fun appendRange(context: Context, uri: Uri, output: File, range: CutRange, progress: Progress): AudioInfo =
+        decodeSelected(context, uri, output, range, progress, append = true)
+
+    private suspend fun decodeSelected(context: Context, uri: Uri, output: File, range: CutRange?, progress: Progress, append: Boolean = false): AudioInfo {
         val resolver = context.contentResolver
         resolver.openInputStream(uri)?.buffered()?.use { input ->
-            readWav(input, output, range, progress)?.let { return it }
+            readWav(input, output, range, progress, append)?.let { return it }
         }
         val extractor = MediaExtractor()
         try {
@@ -87,7 +91,7 @@ object AudioImport {
                 val capacity = if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE))
                     format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE).coerceIn(65536, 8_388_608) else 524288
                 val data = ByteBuffer.allocateDirect(capacity).order(LITTLE_ENDIAN)
-                PcmWriter(output).use { writer ->
+                PcmWriter(output, append).use { writer ->
                     while (true) {
                         currentCoroutineContext().ensureActive()
                         data.clear()
@@ -112,7 +116,7 @@ object AudioImport {
                     val bufferInfo = MediaCodec.BufferInfo()
                     var inputDone = false
                     var finished = false
-                    PcmWriter(output).use { writer ->
+                    PcmWriter(output, append).use { writer ->
                         while (!finished) {
                             currentCoroutineContext().ensureActive()
                             if (!inputDone) {
@@ -177,7 +181,7 @@ object AudioImport {
         }
     }
 
-    private suspend fun readWav(input: BufferedInputStream, output: File, range: CutRange?, progress: Progress): AudioInfo? {
+    private suspend fun readWav(input: BufferedInputStream, output: File, range: CutRange?, progress: Progress, append: Boolean): AudioInfo? {
         val header = readBytes(input, 12)
         if (header.size < 12 || header.decodeToString(0, 4) != "RIFF" || header.decodeToString(8, 12) != "WAVE") return null
         var format = 0
@@ -226,7 +230,7 @@ object AudioImport {
                     skip(input, firstFrame * alignment)
                     val selectedBytes = (lastFrame - firstFrame) * alignment
                     var remaining = selectedBytes
-                    PcmWriter(output).use { writer ->
+                    PcmWriter(output, append).use { writer ->
                         while (remaining > 0) {
                             currentCoroutineContext().ensureActive()
                             val length = minOf(buffer.size.toLong(), remaining).toInt()

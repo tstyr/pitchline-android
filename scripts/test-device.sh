@@ -10,4 +10,8 @@ task_variant="${variant^}"
 adb install -r "app/build/outputs/apk/$variant/app-$variant.apk"
 # ModelStore.prepare runs in the target app, exercising download and SHA-256
 # verification without run-as or debuggable privileges.
-./gradlew --no-daemon -PpitchlineEmulator -PpitchlineTestBuildType="$variant" ":app:connected${task_variant}AndroidTest"
+result=0
+./gradlew --no-daemon -PpitchlineEmulator -PpitchlineTestBuildType="$variant" ":app:connected${task_variant}AndroidTest" || result=$?
+mkdir -p app/build/outputs/ui-screenshots
+adb pull /sdcard/Android/data/com.pitchline.android/files/cutter-ui.png app/build/outputs/ui-screenshots/ || true
+exit "$result"

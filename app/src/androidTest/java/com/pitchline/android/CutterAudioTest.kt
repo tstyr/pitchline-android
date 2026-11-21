@@ -18,6 +18,38 @@ class CutterAudioTest {
     private val test = InstrumentationRegistry.getInstrumentation()
     private val context get() = test.targetContext
 
+    @Test fun deletedMiddleIsAbsentFromAllExportsAndSplitAloneKeepsEverySample() = runBlocking {
+        val dir = File(context.cacheDir, "cut-joined").apply { mkdirs() }
+        try {
+            val original = File(dir, "original.wav")
+            test.context.assets.open("reference.wav").use { input -> original.outputStream().use { input.copyTo(it) } }
+            val bytes = original.readBytes()
+            val source = CutterAudio.inspect(context, Uri.fromFile(original))
+            val full = File(dir, "full.pcm")
+            val info = AudioImport.decode(context, source.uri, full) {}
+            val clips = listOf(CutRange(0, 250), CutRange(750, 1000))
+            val expected = PcmReader(full, info.channels).use { it.read(0, 12000) + it.read(36000, 12000) }
+            val pcm = File(dir, "joined.pcm")
+            for (format in ExportFormat.entries) {
+                val output = File(dir, "joined.${format.extension}")
+                CutterAudio.exportClips(context, source, clips, Uri.fromFile(output), format) {}
+                val joined = AudioImport.decode(context, Uri.fromFile(output), pcm) {}
+                assertEquals(format.name, 0.5, joined.seconds, if (format == ExportFormat.AAC) 0.075 else 0.00001)
+                if (format != ExportFormat.AAC) PcmReader(pcm, joined.channels).use {
+                    assertArrayEquals(format.name, expected, it.read(0, joined.frames.toInt()), 0.00004f)
+                }
+            }
+            val splitOnly = File(dir, "split-only.wav")
+            CutterAudio.exportClips(context, source, listOf(CutRange(0, 250), CutRange(250, 1000)), Uri.fromFile(splitOnly), ExportFormat.WAV) {}
+            val splitInfo = AudioImport.decode(context, Uri.fromFile(splitOnly), pcm) {}
+            assertEquals(48000L, splitInfo.frames)
+            PcmReader(full, info.channels).use { before -> PcmReader(pcm, info.channels).use { after ->
+                assertArrayEquals(before.read(0, 48000), after.read(0, 48000), 0.000001f)
+            } }
+            assertArrayEquals(bytes, original.readBytes())
+        } finally { dir.deleteRecursively() }
+    }
+
     @Test fun cancellingCutKeepsOriginalAndRemovesTemporaryAndPartialFiles() = runBlocking {
         val dir = File(context.cacheDir, "cut-cancel").apply { mkdirs() }
         val before = context.cacheDir.listFiles().orEmpty().filter { it.name.startsWith("cut-export-") }.map { it.name }.toSet()
