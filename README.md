@@ -4,7 +4,7 @@ Android 上で音声を読み込み、歌声の基音を解析してノートや
 
 ## APK の直接ダウンロード
 
-[Pitchline v0.2.0-debug.2 ARM64 APK（10.27 MB）をダウンロード](https://github.com/tstyr/pitchline-android/releases/download/v0.2.0-debug.2/Pitchline-v0.2.0-debug.2-arm64-debug.apk) · [SHA-256](https://github.com/tstyr/pitchline-android/releases/download/v0.2.0-debug.2/Pitchline-v0.2.0-debug.2-arm64-debug.apk.sha256) · [Release](https://github.com/tstyr/pitchline-android/releases/tag/v0.2.0-debug.2)
+[Pitchline v0.3.0-debug.2 ARM64 APK（10.28 MB）をダウンロード](https://github.com/tstyr/pitchline-android/releases/download/v0.3.0-debug.2/Pitchline-v0.3.0-debug.2-arm64-debug.apk) · [SHA-256](https://github.com/tstyr/pitchline-android/releases/download/v0.3.0-debug.2/Pitchline-v0.3.0-debug.2-arm64-debug.apk.sha256) · [Release](https://github.com/tstyr/pitchline-android/releases/tag/v0.3.0-debug.2)
 
 スマホのブラウザで APK のリンクを開いてください。チャット内のファイルプレビューを経由せず取得できます。配布用署名鍵は未設定のため、これは **テスト用 Debug 署名のプレリリース**です。R8 の最適化を有効にするため、アプリの `debuggable` は false にしています。Galaxy S26 実機での動作は未確認です。
 
@@ -130,3 +130,17 @@ APK は **77.54% 削減**しました。公開ファイルを認証なしで直�
 - モデル取得は一時的なタイムアウト・接続エラー・HTTP 5xx／429 を最大 3 回まで再試行。SHA-256 不一致は再試行で回避せず失敗にします。
 
 実際の 6 時間分の楽曲を全編デコードした検証や、Galaxy S26 実機の検証ではありません。長時間ファイルの位置指定・シーク・区間処理の検証です。
+
+## v0.3.0-debug.2 の検証（波形・再生・分割／削除）
+
+説明と常時表示の時刻入力をなくし、大きな波形、再生／一時停止、15 秒送り、スワイプ、ピンチ、分割／削除を中心に変更しました。削除した区間を飛ばして試聴し、残す区間をつないで保存します。
+
+公開 APK は **10,276,259 bytes（10.28 MB／9.80 MiB）**。前版からの増加は 1,796 bytes、元の 45,058,563 bytes からは 77.19% 削減です。認証なしの直接 URL からダウンロードし、SHA-256 `0dcdde01df59269b5aa6592b2dc2eee3b7e71a4888fc148c15535e34521ba049`、v2 署名、ARM64 限定、DEX・ネイティブライブラリの圧縮、16 KiB ELF アラインメントを検証しました。公開 APK の DEX と ARM64 ライブラリは同じタグの検証用ビルドと一致しています。
+
+[タグビルド・検証・公開ログ](https://github.com/tstyr/pitchline-android/actions/runs/44913189711)。Debug／Compact の単体テスト各 11 件、Lint（エラー 0 件）、DSP テストが成功。Android 17（API 37.0、Pixel 6、x86_64）の縮小済みビルドで全 9 件が成功しています。
+
+- 画面操作: 再生／一時停止、±15 秒、波形タップ、スワイプ、2 本指の拡大、分割／削除、Undo／Redo、任意時刻への移動、保存形式の選択、ホーム復帰。
+- 書き出し: 中央の区間を除いた WAV・FLAC・M4A を再読み込み。WAV／FLAC のサンプルを残した元区間と照合し、分割だけの WAV では欠落・重複がないことを確認。
+- 既存の 6 時間スパース WAV の区間処理、5 形式の読み込み、プロジェクト復元、ピッチ編集、両 CPU 分離モデルも成功。
+
+ローカルの縮小済み画面でも SAF から 2 分の検証用 WAV を開き、表示と 15 秒位置での分割を確認しました。Galaxy S26 実機と ARM64 実行は未確認です。広域の波形はサンプリングによる概略、試聴の境界精度は MediaPlayer に依存し、書き出しは再エンコードです。

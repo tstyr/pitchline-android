@@ -1,7 +1,6 @@
 package com.pitchline.android
 
 import android.net.Uri
-import android.graphics.Bitmap
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -120,9 +119,6 @@ class EditorUiTest {
         compose.onNodeWithText("キャンセル").performClick()
         compose.waitUntil(30_000) { !model.state.value.waveLoading }
         compose.waitForIdle()
-        val image = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
-        File(compose.activity.getExternalFilesDir(null), "cutter-ui.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        image.recycle()
         compose.onNodeWithContentDescription("戻る").performClick()
         compose.onNodeWithTag("home").assertIsDisplayed()
         file.delete()
