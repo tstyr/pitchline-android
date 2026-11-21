@@ -53,3 +53,7 @@ fun cutWindow(durationMs: Long, focusMs: Long, spanMs: Long): CutRange {
 /** ceil(timeUs * rate / 1e6), including negative deltas, without the large product. */
 fun cutFrame(timeUs: Long, rate: Int): Long = Math.floorDiv(timeUs, 1_000_000L) * rate +
     (Math.floorMod(timeUs, 1_000_000L) * rate + 999_999L) / 1_000_000L
+
+/** Codec timestamps round sample clocks to microseconds; recover the closest frame first. */
+fun cutTimestampFrame(timeUs: Long, rate: Int): Long = Math.floorDiv(timeUs, 1_000_000L) * rate +
+    (Math.floorMod(timeUs, 1_000_000L) * rate + 500_000L) / 1_000_000L

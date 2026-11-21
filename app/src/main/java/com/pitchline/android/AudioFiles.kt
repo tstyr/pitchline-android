@@ -152,7 +152,7 @@ object AudioImport {
                                             val decodedFrames = data.remaining() / (pcmWidth(encoding) * channels)
                                             frames += writeSelectedPcm(data, channels, rate, encoding, writer,
                                                 bufferInfo.presentationTimeUs, range)
-                                            if (range != null && cutFrame(range.endMs * 1000 - bufferInfo.presentationTimeUs, rate) <= decodedFrames) {
+                                            if (range != null && cutFrame(range.endMs * 1000, rate) - cutTimestampFrame(bufferInfo.presentationTimeUs, rate) <= decodedFrames) {
                                                 finished = true
                                             }
                                         }
@@ -290,8 +290,9 @@ object AudioImport {
         if (range != null) {
             val frameBytes = pcmWidth(encoding) * channels
             val count = buffer.remaining() / frameBytes
-            val first = cutFrame(range.startMs * 1000 - timestampUs, rate).coerceIn(0, count.toLong()).toInt()
-            val end = cutFrame(range.endMs * 1000 - timestampUs, rate).coerceIn(first.toLong(), count.toLong()).toInt()
+            val originFrame = cutTimestampFrame(timestampUs, rate)
+            val first = (cutFrame(range.startMs * 1000, rate) - originFrame).coerceIn(0, count.toLong()).toInt()
+            val end = (cutFrame(range.endMs * 1000, rate) - originFrame).coerceIn(first.toLong(), count.toLong()).toInt()
             val origin = buffer.position()
             buffer.limit(origin + end * frameBytes)
             buffer.position(origin + first * frameBytes)

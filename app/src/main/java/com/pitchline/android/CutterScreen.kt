@@ -46,9 +46,10 @@ fun CutterScreen(onClose: () -> Unit, model: CutterModel = viewModel()) {
     BackHandler(onBack = close)
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle, model) {
+        model.resumeUi()
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) model.stop() }
         lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer); model.leave() }
+        onDispose { lifecycle.removeObserver(observer); model.suspendUi() }
     }
     val view = LocalView.current
     DisposableEffect(state.exporting, view) {

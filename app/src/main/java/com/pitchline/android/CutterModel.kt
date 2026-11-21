@@ -204,6 +204,8 @@ class CutterModel(application: Application, private val saved: SavedStateHandle)
         mutable.update { it.copy(playing = false, preparing = false) }
     }
     fun message(text: String?) { mutable.update { it.copy(message = text) } }
+    fun resumeUi() { if (!state.value.exporting && state.value.source != null && state.value.peaks == null) requestWave() }
+    fun suspendUi() { stop(); waveJob?.cancel(); mutable.update { it.copy(waveLoading = false) } }
     fun leave() { stop(); waveJob?.cancel(); exportJob?.cancel() }
     fun cancelExport() { exportJob?.cancel() }
     fun export(destination: Uri, format: ExportFormat) {

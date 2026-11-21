@@ -29,5 +29,7 @@ class CutRangeTest {
         assertEquals(-48L, cutFrame(-1000, 48000))
         assertEquals(4_320_000_000L, cutFrame(25L * 3_600_000_000, 48000))
         assertEquals(22_050L, cutFrame(750_000, 44100) - cutFrame(250_000, 44100))
+        assertEquals(11_776L, cutTimestampFrame(245_333, 48000))
+        assertEquals(224L, cutFrame(250_000, 48000) - cutTimestampFrame(245_333, 48000))
     }
 }
