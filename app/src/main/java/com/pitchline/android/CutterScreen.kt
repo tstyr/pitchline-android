@@ -105,10 +105,10 @@ fun CutterScreen(onClose: () -> Unit, model: CutterModel = viewModel()) {
             } else {
                 Text(source.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
-                Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 8.dp).clickable(enabled && edit.durationMs > 0) { jump() },
+                Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 8.dp).testTag("cut-position").clickable(enabled && edit.durationMs > 0) { jump() },
                     verticalAlignment = Alignment.CenterVertically) {
                     Text(cutTime(edit.positionMs), fontSize = 23.sp, fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.weight(1f).testTag("cut-position"), maxLines = 1)
+                        modifier = Modifier.weight(1f), maxLines = 1)
                     Text("/ ${cutTime(edit.durationMs).substringBefore('.')}", fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
                 }
@@ -258,11 +258,13 @@ private fun CutterWaveEditor(state: CutterState, model: CutterModel, enabled: Bo
         }
         drawLine(wave.copy(alpha = 0.2f), Offset(0f, center), Offset(size.width, center), 1f)
         state.peaks?.let { peaks ->
-            val stride = (peaks.size / size.width.coerceAtLeast(1f)).toInt().coerceAtLeast(1)
+            val sampled = state.waveWindow ?: window
+            val displayedWidth = size.width * sampled.lengthMs.toDouble() / window.lengthMs
+            val stride = (peaks.size / displayedWidth.coerceAtLeast(1.0)).toInt().coerceAtLeast(1)
             for (i in peaks.indices step stride) {
                 val amplitude = peaks[i].coerceIn(0f, 1f) * (size.height - ruler) * 0.39f
-                val xx = (i + 0.5f) * size.width / peaks.size
-                drawLine(wave, Offset(xx, center - amplitude), Offset(xx, center + amplitude), 1.5.dp.toPx())
+                val xx = x(sampled.startMs + ((i + 0.5) * sampled.lengthMs / peaks.size).roundToLong())
+                if (xx in 0f..size.width) drawLine(wave, Offset(xx, center - amplitude), Offset(xx, center + amplitude), 1.5.dp.toPx())
             }
         }
         val tick = listOf(100L, 250L, 500L, 1000L, 5000L, 15000L, 30000L, 60000L, 300000L, 900000L, 3600000L, 21600000L)

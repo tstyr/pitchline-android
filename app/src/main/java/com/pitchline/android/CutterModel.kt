@@ -27,6 +27,7 @@ data class CutterState(
     val loading: Boolean = false, val exporting: Boolean = false, val percent: Int = 0,
     val playing: Boolean = false, val preparing: Boolean = false,
     val undoCount: Int = 0, val redoCount: Int = 0, val message: String? = null,
+    val waveWindow: CutRange? = null,
 )
 
 class CutterModel(application: Application, private val saved: SavedStateHandle) : AndroidViewModel(application) {
@@ -107,7 +108,7 @@ class CutterModel(application: Application, private val saved: SavedStateHandle)
             redo.clear()
         }
         val window = windowFor(edit, state.value.window?.lengthMs ?: 30_000)
-        mutable.update { it.copy(edit = edit, window = window, undoCount = undo.size, redoCount = redo.size) }
+        mutable.update { it.copy(edit = edit, window = window, peaks = null, waveWindow = null, undoCount = undo.size, redoCount = redo.size) }
         saveEdit(edit)
         requestWave()
     }
@@ -176,10 +177,11 @@ class CutterModel(application: Application, private val saved: SavedStateHandle)
         waveJob?.cancel()
         val source = state.value.source ?: return
         val edit = state.value.edit
-        val window = state.value.window ?: run { mutable.update { it.copy(peaks = null, waveLoading = false) }; return }
+        val window = state.value.window ?: run { mutable.update { it.copy(peaks = null, waveWindow = null, waveLoading = false) }; return }
         val key = WaveKey(source.uri.toString(), edit.clips, window)
         val cached = waveCache[key]
-        mutable.update { it.copy(peaks = cached, waveError = false, waveLoading = cached == null) }
+        mutable.update { it.copy(peaks = cached ?: it.peaks, waveWindow = if (cached != null) window else it.waveWindow,
+            waveError = false, waveLoading = cached == null) }
         if (cached != null) return
         waveJob = viewModelScope.launch {
             try {
@@ -188,13 +190,13 @@ class CutterModel(application: Application, private val saved: SavedStateHandle)
                     CutterAudio.timelineWaveform(app, source, edit, window) { partial ->
                         mutable.update { current ->
                             if (current.source?.uri == source.uri && current.edit.clips == edit.clips && current.window == window)
-                                current.copy(peaks = partial) else current
+                                current.copy(peaks = partial, waveWindow = window) else current
                         }
                     }
                 }
                 waveCache[key] = peaks
                 while (waveCache.size > 12) waveCache.remove(waveCache.keys.first())
-                mutable.update { it.copy(peaks = peaks, waveLoading = false) }
+                mutable.update { it.copy(peaks = peaks, waveWindow = window, waveLoading = false) }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 mutable.update { it.copy(waveLoading = false, waveError = true) }
