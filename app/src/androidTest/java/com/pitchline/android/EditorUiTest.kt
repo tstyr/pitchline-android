@@ -153,9 +153,8 @@ class EditorUiTest {
 
     @Test fun separatesBeforeAnalysisThroughTheForegroundServiceAndCanOpenTheOriginalLater() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        instrumentation.uiAutomation.executeShellCommand("pm grant com.pitchline.android android.permission.POST_NOTIFICATIONS").use {
-            java.io.FileInputStream(it.fileDescriptor).use { stream -> stream.readBytes() }
-        }
+        android.os.ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(
+            "pm grant com.pitchline.android android.permission.POST_NOTIFICATIONS")).use { it.readBytes() }
         val reference = File(compose.activity.cacheDir, "separate-first.wav")
         instrumentation.context.assets.open("reference.wav").use { input -> reference.outputStream().use { input.copyTo(it) } }
         lateinit var model: MainModel

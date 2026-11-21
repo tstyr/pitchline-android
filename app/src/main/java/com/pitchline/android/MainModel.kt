@@ -68,6 +68,7 @@ class MainModel(application: Application) : AndroidViewModel(application) {
                     SeparationStatus.Idle -> Unit
                     is SeparationStatus.Running -> mutable.update { it.copy(separation = status) }
                     is SeparationStatus.Finished -> {
+                        var resultMessage = status.message
                         val current = state.value.editor
                         if (status.id != null && (status.openResult || current?.project?.id == status.id)) {
                             val updated = runCatching { withContext(Dispatchers.IO) {
@@ -77,9 +78,9 @@ class MainModel(application: Application) : AndroidViewModel(application) {
                             updated.onSuccess { editor ->
                                 if (status.openResult) setEditor(editor) else mutable.update { it.copy(editor = editor, loopRange = null) }
                             }
-                                .onFailure { message(it.message ?: "分離結果を開けません") }
+                                .onFailure { resultMessage = "分離結果を開けません: ${it.message.orEmpty()}" }
                         }
-                        mutable.update { it.copy(separation = null, message = status.message) }
+                        mutable.update { it.copy(separation = null, message = resultMessage) }
                         SeparationService.consumed(status)
                         refresh()
                     }
