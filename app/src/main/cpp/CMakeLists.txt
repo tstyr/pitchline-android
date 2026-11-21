@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.22)
+project(pitchline LANGUAGES CXX)
+add_library(pitchline SHARED dsp.cpp jni.cpp)
+target_compile_features(pitchline PRIVATE cxx_std_17)
+target_compile_options(pitchline PRIVATE -O3 -Wall -Wextra)
