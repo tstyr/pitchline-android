@@ -2,6 +2,12 @@
 
 Android 上で音声を読み込み、歌声の基音を解析してノートやピッチカーブを編集する日本語アプリです。音声処理は端末内で完結します。分離モデルの初回取得だけインターネット接続が必要です。
 
+## APK の直接ダウンロード
+
+[Pitchline v0.1.1-debug.1 ARM64 APK（10.12 MB）をダウンロード](https://github.com/tstyr/pitchline-android/releases/download/v0.1.1-debug.1/Pitchline-v0.1.1-debug.1-arm64-debug.apk) · [SHA-256](https://github.com/tstyr/pitchline-android/releases/download/v0.1.1-debug.1/Pitchline-v0.1.1-debug.1-arm64-debug.apk.sha256) · [Release](https://github.com/tstyr/pitchline-android/releases/tag/v0.1.1-debug.1)
+
+スマホのブラウザで APK のリンクを開いてください。チャット内のファイルプレビューを経由せず取得できます。配布用署名鍵は未設定のため、これは **テスト用 Debug 署名のプレリリース**です。R8 の最適化を有効にするため、アプリの `debuggable` は false にしています。Galaxy S26 実機での動作は未確認です。
+
 ## 使い方
 
 1. ホームの「音声ファイルを開く」から MP3、WAV、FLAC、M4A／AAC、OGG を選択します。音声をアプリ内にコピーして新規プロジェクトを作ります。
@@ -62,7 +68,7 @@ python3 scripts/apk-report.py app/build/outputs/apk/compact/app-compact.apk --co
 
 公開先: https://github.com/tstyr/pitchline-android/releases
 
-Release の APK リンクは `https://github.com/tstyr/pitchline-android/releases/download/<タグ>/<APK名>` です。チャット内プレビューを開かず、スマホのブラウザでこのリンクから APK をダウンロードしてください。ブラウザの「不明なアプリのインストール」を許可して開きます。配布用署名鍵が未設定の Debug 版は Actions 実行ごとに署名が変わるため、次の版へデータを維持して更新できることは保証しません。アンインストールは保存済みプロジェクトを削除します。
+Release の APK リンクは `https://github.com/tstyr/pitchline-android/releases/download/<タグ>/<APK名>` です。チャット内プレビューを開かず、スマホのブラウザでこのリンクから APK をダウンロードしてください。ブラウザの「不明なアプリのインストール」を許可して開きます。配布用署名鍵が未設定の Debug 版は署名鍵を固定管理していないため、次の版へデータを維持して更新できることは保証しません。アンインストールは保存済みプロジェクトを削除します。
 
 ## 対応範囲
 
@@ -72,3 +78,25 @@ Release の APK リンクは `https://github.com/tstyr/pitchline-android/release
 - Galaxy S26 実機での音質、発熱、Bluetooth レイテンシおよび長時間の連続動作は未検証です。
 
 アプリは MIT ライセンスで提供されます。依存関係とモデルのライセンスは [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) を参照してください。
+
+## v0.1.1-debug.1 の実測と検証（2026-11-21）
+
+元の ZIP を取り込んだコミット `cdfca31` の ARM64 Debug APK と、タグ `v0.1.1-debug.1` の Actions から公開した APK を比較しています。ZIP の保存形式とバイト数は `scripts/apk-report.py` で実測しました。
+
+| 対象 | 変更前 | 公開 APK |
+| --- | ---: | ---: |
+| APK 全体 | 45,058,563 bytes（42.97 MiB） | 10,120,803 bytes（9.65 MiB） |
+| ネイティブライブラリの ZIP 内サイズ | 19,723,312 bytes（非圧縮） | 7,100,649 bytes（圧縮） |
+| DEX の ZIP 内サイズ | 24,718,500 bytes（非圧縮） | 2,764,043 bytes（R8 後に圧縮） |
+
+APK は **77.54% 削減**しました。公開ファイルを認証なしで直接ダウンロードし、SHA-256 `00757331778f49b3ad2d8eb914c94e0d56b61a76f05448bb4d91f9a5c52bfd79` と署名の検証に成功しています。ARM64 のみを含み、全ネイティブライブラリの ELF LOAD セグメントは 16 KiB アラインメント検査を通過しています。
+
+- Gradle: Debug／Compact の単体テストは各 5 件成功。両ビルドの Lint はエラー 0 件（警告 17 件、ヒント 1 件）。
+- `scripts/test-dsp.sh`: YIN の F0 検出、TD-PSOLA の移調・フォルマント・ビブラート、STFT／ISTFT、リサンプルの検証に成功。
+- Android 15（ローカル x86_64）と Android 17（Actions、API 37.0、x86_64）で、縮小済み APK の全 4 件の動作テストに成功。WAV・MP3・FLAC・M4A・OGG の読み込み、プロジェクト復元、編集済み音声の WAV・FLAC・M4A 書き出しと再読み込み、エディター描画・半音編集・Undo・ホーム復帰を確認。
+- 両 Android 環境で、通常のモデル初回取得と SHA-256 検証を経て Open-Unmix／HQ の CPU 分離が完走。検証音源は 48 kHz・ステレオ・約 1.2 秒で、有限の出力とステムのサンプル整列を確認。
+- ローカルでインストールした複数 ABI 版とローカル ARM64 版の DEX および ARM64 ライブラリが同一であることも比較確認。公開 APK の DEX もローカルで動作確認した DEX と一致。
+
+[タグビルドの検証・公開ログ](https://github.com/tstyr/pitchline-android/actions/runs/44891300128)（2 回目の実行ですべて成功）。初回はモデル配布元の HTTP 502 によって分離テストが失敗し、同じタグの再実行で成功しました。
+
+**未確認:** 公開した ARM64 APK の Galaxy S26 実機へのインストール・ARM64 上での実行、長時間音源の処理、実機での音質・発熱・Bluetooth レイテンシ。端末が接続されていないため、実機検証を完了したとはしていません。
