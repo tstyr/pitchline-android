@@ -35,6 +35,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Pitchline-arm64-compact-debug
+          overwrite: true
           path: |
             app/build/outputs/apk/compact/app-compact.apk
             app/build/outputs/mapping/compact/
@@ -78,6 +79,7 @@ jobs:
         if: always()
         with:
           name: Android-17-device-test-results
+          overwrite: true
           path: |
             app/build/outputs/androidTest-results/
             app/build/reports/androidTests/
@@ -164,6 +166,7 @@ jobs:
         if: always()
         with:
           name: Release-verification
+          overwrite: true
           path: |
             *.report.json
             app/build/outputs/mapping/

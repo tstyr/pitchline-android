@@ -124,6 +124,7 @@ class MainActivity : ComponentActivity() {
 private fun Pitchline(model: MainModel = viewModel()) {
     val session by model.state.collectAsStateWithLifecycle()
     var dialog by rememberSaveable { mutableStateOf("") }
+    var cutterOpen by rememberSaveable { mutableStateOf(false) }
     var exportSource by rememberSaveable { mutableStateOf(ExportSource.MIX) }
     var exportFormat by rememberSaveable { mutableStateOf(ExportFormat.WAV) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -155,7 +156,8 @@ private fun Pitchline(model: MainModel = viewModel()) {
             Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                 Column(Modifier.fillMaxSize()) {
                     val editor = session.editor
-                    if (editor == null) Home(session, !locked, open, model::open, onSettings = { dialog = "settings" })
+                    if (cutterOpen) CutterScreen(onClose = { cutterOpen = false })
+                    else if (editor == null) Home(session, !locked, open, model::open, onSettings = { dialog = "settings" }, onCutter = { cutterOpen = true })
                     else Editor(session, editor, model, !locked, setDialog = { dialog = it })
                 }
                 val progress = session.separation?.let { WorkStatus(it.text, it.percent) } ?: session.work
@@ -222,7 +224,7 @@ private fun Pitchline(model: MainModel = viewModel()) {
 
 @Composable
 private fun Home(
-    session: Session, enabled: Boolean, onOpen: () -> Unit, onProject: (String) -> Unit, onSettings: () -> Unit,
+    session: Session, enabled: Boolean, onOpen: () -> Unit, onProject: (String) -> Unit, onSettings: () -> Unit, onCutter: () -> Unit,
 ) {
     Row(Modifier.fillMaxWidth().height(57.dp).padding(horizontal = 17.dp), verticalAlignment = Alignment.CenterVertically) {
         Brand()
@@ -243,6 +245,8 @@ private fun Home(
                     Spacer(Modifier.width(7.dp))
                     Label("音声ファイルを開く")
                 }
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(onCutter, enabled = enabled, modifier = Modifier.testTag("open-cutter")) { Label("オーディオカッター · 長時間音声を切り出す") }
                 Spacer(Modifier.height(24.dp))
                 Label("最近のプロジェクト", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = dim)
                 Spacer(Modifier.height(9.dp))

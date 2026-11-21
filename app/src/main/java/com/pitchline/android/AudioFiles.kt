@@ -22,10 +22,14 @@ import kotlin.math.roundToInt
 private const val block = 4096
 typealias Progress = (Float) -> Unit
 
-class PcmReader(file: File, private val channels: Int) : AutoCloseable {
+interface PcmSource : AutoCloseable {
+    fun read(first: Long, frames: Int): FloatArray
+}
+
+class PcmReader(file: File, private val channels: Int) : PcmSource {
     private val handle = RandomAccessFile(file, "r")
     private var storage = ByteArray(0)
-    fun read(first: Long, frames: Int): FloatArray {
+    override fun read(first: Long, frames: Int): FloatArray {
         val samples = frames * channels
         val bytes = samples * 4
         if (storage.size < bytes) storage = ByteArray(bytes)
@@ -51,10 +55,16 @@ class PcmWriter(file: File) : AutoCloseable {
 }
 
 object AudioImport {
-    suspend fun decode(context: Context, uri: Uri, output: File, progress: Progress): AudioInfo {
+    suspend fun decode(context: Context, uri: Uri, output: File, progress: Progress): AudioInfo =
+        decodeSelected(context, uri, output, null, progress)
+
+    suspend fun decodeRange(context: Context, uri: Uri, output: File, range: CutRange, progress: Progress): AudioInfo =
+        decodeSelected(context, uri, output, range, progress)
+
+    private suspend fun decodeSelected(context: Context, uri: Uri, output: File, range: CutRange?, progress: Progress): AudioInfo {
         val resolver = context.contentResolver
         resolver.openInputStream(uri)?.buffered()?.use { input ->
-            readWav(input, output, progress)?.let { return it }
+            readWav(input, output, range, progress)?.let { return it }
         }
         val extractor = MediaExtractor()
         try {
@@ -69,6 +79,7 @@ object AudioImport {
             var rate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             var channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
             validateAudio(rate, channels)
+            if (range != null) extractor.seekTo(range.startMs * 1000, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
             var frames = 0L
             if (mime == MediaFormat.MIMETYPE_AUDIO_RAW) {
                 val encoding = if (format.containsKey(MediaFormat.KEY_PCM_ENCODING))
@@ -84,8 +95,11 @@ object AudioImport {
                         if (size < 0) break
                         data.position(0)
                         data.limit(size)
-                        frames += writePcm(data, channels, encoding, writer)
-                        if (durationUs > 0) progress((extractor.sampleTime.toFloat() / durationUs).coerceIn(0f, 1f))
+                        val timestamp = extractor.sampleTime
+                        frames += writeSelectedPcm(data, channels, rate, encoding, writer, timestamp, range)
+                        if (range != null && timestamp >= range.endMs * 1000) break
+                        if (range != null) progress(((timestamp / 1000.0 - range.startMs) / range.lengthMs).toFloat().coerceIn(0f, 1f))
+                        else if (durationUs > 0) progress((extractor.sampleTime.toFloat() / durationUs).coerceIn(0f, 1f))
                         extractor.advance()
                     }
                 }
@@ -135,10 +149,16 @@ object AudioImport {
                                             val data = requireNotNull(codec.getOutputBuffer(index)).order(LITTLE_ENDIAN)
                                             data.limit(bufferInfo.offset + bufferInfo.size)
                                             data.position(bufferInfo.offset)
-                                            frames += writePcm(data, channels, encoding, writer)
+                                            val decodedFrames = data.remaining() / (pcmWidth(encoding) * channels)
+                                            frames += writeSelectedPcm(data, channels, rate, encoding, writer,
+                                                bufferInfo.presentationTimeUs, range)
+                                            if (range != null && cutFrame(range.endMs * 1000 - bufferInfo.presentationTimeUs, rate) <= decodedFrames) {
+                                                finished = true
+                                            }
                                         }
-                                        finished = bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
-                                        if (durationUs > 0) progress((bufferInfo.presentationTimeUs.toFloat() / durationUs).coerceIn(0f, 1f))
+                                        finished = finished || bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                                        if (range != null) progress(((bufferInfo.presentationTimeUs / 1000.0 - range.startMs) / range.lengthMs).toFloat().coerceIn(0f, 1f))
+                                        else if (durationUs > 0) progress((bufferInfo.presentationTimeUs.toFloat() / durationUs).coerceIn(0f, 1f))
                                     } finally {
                                         codec.releaseOutputBuffer(index, false)
                                     }
@@ -157,7 +177,7 @@ object AudioImport {
         }
     }
 
-    private suspend fun readWav(input: BufferedInputStream, output: File, progress: Progress): AudioInfo? {
+    private suspend fun readWav(input: BufferedInputStream, output: File, range: CutRange?, progress: Progress): AudioInfo? {
         val header = readBytes(input, 12)
         if (header.size < 12 || header.decodeToString(0, 4) != "RIFF" || header.decodeToString(8, 12) != "WAVE") return null
         var format = 0
@@ -199,7 +219,13 @@ object AudioImport {
                         "WAV のデータサイズが正しくありません"
                     }
                     val buffer = ByteArray(block * alignment)
-                    var remaining = size
+                    val totalFrames = size / alignment
+                    val firstFrame = range?.let { cutFrame(it.startMs * 1000, rate).coerceAtMost(totalFrames) } ?: 0L
+                    val lastFrame = range?.let { cutFrame(it.endMs * 1000, rate).coerceAtMost(totalFrames) } ?: totalFrames
+                    require(lastFrame > firstFrame) { "選択区間に音声がありません" }
+                    skip(input, firstFrame * alignment)
+                    val selectedBytes = (lastFrame - firstFrame) * alignment
+                    var remaining = selectedBytes
                     PcmWriter(output).use { writer ->
                         while (remaining > 0) {
                             currentCoroutineContext().ensureActive()
@@ -212,10 +238,10 @@ object AudioImport {
                             }
                             writePcm(ByteBuffer.wrap(buffer, 0, length).order(LITTLE_ENDIAN), channels, encoding, writer)
                             remaining -= length
-                            progress(1f - remaining.toFloat() / size)
+                            progress(1f - remaining.toFloat() / selectedBytes)
                         }
                     }
-                    return AudioInfo(rate, channels, size / alignment)
+                    return AudioInfo(rate, channels, lastFrame - firstFrame)
                 }
                 else -> skip(input, size)
             }
@@ -251,14 +277,30 @@ object AudioImport {
         require(rate in 8000..192000) { "8〜192 kHz の音声を選択してください" }
     }
 
-    private fun writePcm(buffer: ByteBuffer, channels: Int, encoding: Int, writer: PcmWriter): Int {
-        val width = when (encoding) {
+    private fun pcmWidth(encoding: Int) = when (encoding) {
             AudioFormat.ENCODING_PCM_8BIT -> 1
             AudioFormat.ENCODING_PCM_16BIT -> 2
             AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3
             AudioFormat.ENCODING_PCM_32BIT, AudioFormat.ENCODING_PCM_FLOAT -> 4
             else -> error("未対応の PCM 形式です")
         }
+
+    private fun writeSelectedPcm(buffer: ByteBuffer, channels: Int, rate: Int, encoding: Int,
+        writer: PcmWriter, timestampUs: Long, range: CutRange?): Int {
+        if (range != null) {
+            val frameBytes = pcmWidth(encoding) * channels
+            val count = buffer.remaining() / frameBytes
+            val first = cutFrame(range.startMs * 1000 - timestampUs, rate).coerceIn(0, count.toLong()).toInt()
+            val end = cutFrame(range.endMs * 1000 - timestampUs, rate).coerceIn(first.toLong(), count.toLong()).toInt()
+            val origin = buffer.position()
+            buffer.limit(origin + end * frameBytes)
+            buffer.position(origin + first * frameBytes)
+        }
+        return writePcm(buffer, channels, encoding, writer)
+    }
+
+    private fun writePcm(buffer: ByteBuffer, channels: Int, encoding: Int, writer: PcmWriter): Int {
+        val width = pcmWidth(encoding)
         val frames = buffer.remaining() / (width * channels)
         val result = FloatArray(minOf(block, frames) * channels)
         var remaining = frames
@@ -296,7 +338,7 @@ enum class ExportFormat(val label: String, val extension: String, val mime: Stri
 
 class MixReader(
     store: ProjectStore, project: Project, rendered: File?, private val listen: Listen, private val mixer: Mix = project.mix,
-) : AutoCloseable {
+) : PcmSource {
     private val channels = project.info.channels
     private val vocal = if (listen != Listen.BACKING) PcmReader(
         if (listen == Listen.ORIGINAL) store.original(project.id) else rendered ?: store.vocal(project), channels
@@ -304,7 +346,8 @@ class MixReader(
     private val backing = if (listen == Listen.MIX || listen == Listen.BACKING) {
         store.backing(project)?.let { PcmReader(it, channels) }
     } else null
-    fun read(first: Long, frames: Int, before: Mix = mixer, after: Mix = before): FloatArray {
+    override fun read(first: Long, frames: Int): FloatArray = read(first, frames, mixer, mixer)
+    fun read(first: Long, frames: Int, before: Mix, after: Mix = before): FloatArray {
         val lead = vocal?.read(first, frames)
         val base = backing?.read(first, frames)
         if (listen == Listen.ORIGINAL) return requireNotNull(lead)
@@ -325,7 +368,7 @@ class MixReader(
 }
 
 object AudioExport {
-    suspend fun encode(file: File, info: AudioInfo, mix: MixReader, format: ExportFormat, progress: Progress) {
+    suspend fun encode(file: File, info: AudioInfo, mix: PcmSource, format: ExportFormat, progress: Progress) {
         var peak = 0f
         var at = 0L
         while (at < info.frames) {
@@ -342,7 +385,7 @@ object AudioExport {
         } else encodeCodec(file, info, mix, format, gain, progress)
     }
 
-    private suspend fun wav(output: OutputStream, info: AudioInfo, mix: MixReader, gain: Float, progress: Progress) {
+    private suspend fun wav(output: OutputStream, info: AudioInfo, mix: PcmSource, gain: Float, progress: Progress) {
         val bytes = info.frames * info.channels * 3
         val riffSize = bytes + 36 + bytes % 2
         require(riffSize <= 0xffffffffL) { "WAV の 4 GB 上限を超えます" }
@@ -373,7 +416,7 @@ object AudioExport {
     }
 
     private suspend fun encodeCodec(
-        file: File, info: AudioInfo, mix: MixReader, format: ExportFormat, gain: Float, progress: Progress,
+        file: File, info: AudioInfo, mix: PcmSource, format: ExportFormat, gain: Float, progress: Progress,
     ) {
         val aac = format == ExportFormat.AAC
         val rate = if (aac && info.rate !in listOf(8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000)) 48000 else info.rate
