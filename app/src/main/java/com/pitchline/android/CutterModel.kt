@@ -282,7 +282,10 @@ class CutterModel(application: Application, private val saved: SavedStateHandle)
     }
     fun stop() { navigationResume = false; stopPlayer() }
     fun message(text: String?) { mutable.update { it.copy(message = text) } }
-    fun resumeUi() { if (!state.value.exporting && state.value.source != null && state.value.peaks == null) requestWave() }
+    fun resumeUi() {
+        val s = state.value
+        if (!s.exporting && s.source != null && (s.peaks == null || s.waveWindow != s.window || waveJob?.isCancelled == true)) requestWave()
+    }
     fun suspendUi() { stop(); waveJob?.cancel(); mutable.update { it.copy(waveLoading = false) } }
     fun leave() { suspendUi(); exportJob?.cancel() }
     fun cancelExport() { exportJob?.cancel() }

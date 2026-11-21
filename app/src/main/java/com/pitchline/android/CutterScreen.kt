@@ -240,6 +240,7 @@ private fun CutterWaveEditor(state: CutterState, model: CutterModel, enabled: Bo
         }) {
         val window = state.window ?: return@Canvas
         val ruler = 28.dp.toPx()
+        if (size.height <= ruler || size.width < 2f) return@Canvas
         fun x(ms: Long) = ((ms - window.startMs).toDouble() / window.lengthMs * size.width).toFloat()
         val center = ruler + (size.height - ruler) / 2
         state.edit.pieces.forEachIndexed { index, piece ->
@@ -288,7 +289,7 @@ private fun CutterWaveEditor(state: CutterState, model: CutterModel, enabled: Bo
 }
 
 @Composable
-private fun CutOverview(state: CutterState, model: CutterModel, enabled: Boolean, modifier: Modifier) {
+private fun CutOverview(state: CutterState, model: CutterModel, enabled: Boolean, modifier: Modifier = Modifier) {
     val latest by rememberUpdatedState(state)
     val accent = MaterialTheme.colorScheme.primary
     val wave = MaterialTheme.colorScheme.secondary
