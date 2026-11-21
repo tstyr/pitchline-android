@@ -4,7 +4,7 @@ Android 上で音声を読み込み、歌声の基音を解析してノートや
 
 ## APK の直接ダウンロード
 
-[Pitchline v0.1.1-debug.1 ARM64 APK（10.12 MB）をダウンロード](https://github.com/tstyr/pitchline-android/releases/download/v0.1.1-debug.1/Pitchline-v0.1.1-debug.1-arm64-debug.apk) · [SHA-256](https://github.com/tstyr/pitchline-android/releases/download/v0.1.1-debug.1/Pitchline-v0.1.1-debug.1-arm64-debug.apk.sha256) · [Release](https://github.com/tstyr/pitchline-android/releases/tag/v0.1.1-debug.1)
+[Pitchline v0.2.0-debug.2 ARM64 APK（10.27 MB）をダウンロード](https://github.com/tstyr/pitchline-android/releases/download/v0.2.0-debug.2/Pitchline-v0.2.0-debug.2-arm64-debug.apk) · [SHA-256](https://github.com/tstyr/pitchline-android/releases/download/v0.2.0-debug.2/Pitchline-v0.2.0-debug.2-arm64-debug.apk.sha256) · [Release](https://github.com/tstyr/pitchline-android/releases/tag/v0.2.0-debug.2)
 
 スマホのブラウザで APK のリンクを開いてください。チャット内のファイルプレビューを経由せず取得できます。配布用署名鍵は未設定のため、これは **テスト用 Debug 署名のプレリリース**です。R8 の最適化を有効にするため、アプリの `debuggable` は false にしています。Galaxy S26 実機での動作は未確認です。
 
@@ -20,6 +20,8 @@ Android 上で音声を読み込み、歌声の基音を解析してノートや
 4. WAV・FLAC・M4A を選び「選択した区間を保存」で別ファイルへ書き出します。指定区間だけをデコードし、固定長バッファで再エンコードします。元ファイルは上書きしません。音程編集後のプロジェクトではなく、選択した元音声を切り出す機能です。
 
 何時間の位置も `Long` の時刻とファイルオフセットで扱います。書き出しには選択区間の PCM と出力ファイル用の空き容量が必要です。不足時は開始前に通知します。WAV は RIFF の 4 GB 上限があり、圧縮音声も再エンコードします（無劣化のストリームコピーではありません）。書き出し中は画面を開いたままにしてください。「中止」で一時ファイルを削除し、保存先の途中の出力も削除を試みます。クラウド上など、プロバイダーがシークに対応しないファイルでは取得に時間がかかったり開けない場合があります。
+
+M4A にはコーデックによる短いエンコーダー遅延・末尾パディングが含まれる場合があります。切り出した区間の厳密なサンプル数を保持したい場合は WAV／FLAC を選んでください。
 
 ### ピッチ編集
 
@@ -112,4 +114,17 @@ APK は **77.54% 削減**しました。公開ファイルを認証なしで直�
 
 [タグビルドの検証・公開ログ](https://github.com/tstyr/pitchline-android/actions/runs/44891300128)（2 回目の実行ですべて成功）。初回はモデル配布元の HTTP 502 によって分離テストが失敗し、同じタグの再実行で成功しました。
 
-**未確認:** 公開した ARM64 APK の Galaxy S26 実機へのインストール・ARM64 上での実行、長時間音源の処理、実機での音質・発熱・Bluetooth レイテンシ。端末が接続されていないため、実機検証を完了したとはしていません。
+**未確認:** 公開した ARM64 APK の Galaxy S26 実機へのインストール・ARM64 上での実行、フル尺の長時間音源のピッチ編集・分離、実機での音質・発熱・Bluetooth レイテンシ。端末が接続されていないため、実機検証を完了したとはしていません。
+
+## v0.2.0-debug.2 の検証（オーディオカッター）
+
+公開 APK は **10,274,463 bytes（10.27 MB／9.80 MiB）**。カッター追加前の版からの増加は 153,660 bytes です。直接 URL から認証なしで取得し、SHA-256 `0d4bc745f28272b6af713872e28754da1a33e8b08ad726cb59f7aca8049cace9`、APK 署名、ARM64 限定、ネイティブライブラリと DEX の圧縮、16 KiB ELF アラインメントを検証しました。
+
+[タグビルド・検証・公開ログ](https://github.com/tstyr/pitchline-android/actions/runs/44908631433)。Debug／Compact の単体テスト各 8 件、Lint、DSP テストが成功し、Android 17（API 37.0、Pixel 6 プロファイル、x86_64）で縮小済み APK の全 8 件の動作テストが成功しています。
+
+- 検証用の **6 時間・48 kHz・ステレオ WAV**（大半が空白のスパースファイル）で、5 時間 45 分の位置、先頭から 2 GB を超えるオフセットへ直接移動し、250 ms だけを読み込み。出力 PCM が 96,000 bytes であることと、先頭・末尾のサンプルを照合。
+- 同じ区間の WAV・FLAC・M4A 書き出し・再読み込み、5 形式の区間デコード、WAV／FLAC の元 PCM との一致、中止時の元ファイル保護と一時・途中ファイルの削除を確認。
+- カッター画面で時刻入力、10 ms の調整、試聴、ホーム復帰を確認。既存のピッチ編集・復元・3 形式の書き出しと再読み込み・両 CPU 分離モデルも再検証。
+- モデル取得は一時的なタイムアウト・接続エラー・HTTP 5xx／429 を最大 3 回まで再試行。SHA-256 不一致は再試行で回避せず失敗にします。
+
+実際の 6 時間分の楽曲を全編デコードした検証や、Galaxy S26 実機の検証ではありません。長時間ファイルの位置指定・シーク・区間処理の検証です。
