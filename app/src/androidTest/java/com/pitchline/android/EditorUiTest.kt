@@ -10,6 +10,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Rule
@@ -39,11 +41,17 @@ class EditorUiTest {
         compose.onNodeWithTag("cut-end-apply").performClick()
         compose.waitUntil(5000) { model.state.value.range == CutRange(250, 750) }
         compose.runOnIdle { assertEquals(CutEdge.END, model.state.value.edge) }
-        compose.onNodeWithText("10 ms").performScrollTo().performClick()
+        compose.onNodeWithText("10 ms").performScrollTo()
+        compose.onNodeWithTag("cutter").performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 180f) }
+        compose.onNodeWithText("10 ms").performClick()
         compose.onNodeWithText("10 ms").assertIsSelected()
-        compose.onNodeWithTag("cut-minus").performScrollTo().performClick()
+        compose.onNodeWithTag("cut-minus").performScrollTo()
+        compose.onNodeWithTag("cutter").performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 180f) }
+        compose.onNodeWithTag("cut-minus").performClick()
         compose.runOnIdle { assertEquals(CutRange(250, 740), model.state.value.range) }
-        compose.onNodeWithText("開始から試聴").performScrollTo().performClick()
+        compose.onNodeWithText("開始から試聴").performScrollTo()
+        compose.onNodeWithTag("cutter").performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 180f) }
+        compose.onNodeWithText("開始から試聴").performClick()
         compose.waitUntil(10_000) { !model.state.value.preparing }
         assertNull(model.state.value.message)
         compose.runOnUiThread { model.stop() }

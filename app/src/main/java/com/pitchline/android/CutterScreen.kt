@@ -67,7 +67,7 @@ fun CutterScreen(onClose: () -> Unit, model: CutterModel = viewModel()) {
         confirmButton = { TextButton({ model.leave(); onClose() }) { Text("中止して戻る") } },
         dismissButton = { TextButton({ confirmClose = false }) { Text("続ける") } })
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp).testTag("cutter"),
+    Column(Modifier.fillMaxSize().testTag("cutter").verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             TextButton(close) { Text("戻る") }
